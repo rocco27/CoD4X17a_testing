@@ -43,10 +43,10 @@ typedef struct {
 	qboolean	overflowed;		//0x00
 	qboolean	readonly;		//0x04
 	byte		*data;			//0x08
-	byte*		var_01;			//0x0c
+	byte		*splitdata;		//0x0c
 	int		maxsize;		//0x10
 	int		cursize;		//0x14
-	int		var_02;			//0x18
+	int		splitcursize;		//0x18
 	int		readcount;		//0x1c
 	int		bit;			//0x20	// for bitwise reads and writes
 	int		lastRefEntity;		//0x24
@@ -96,7 +96,8 @@ void __cdecl MSG_WriteDeltaPlayerstate(struct snapshotInfo_s* , msg_t* , int , s
 void __cdecl MSG_WriteEntityIndex(struct snapshotInfo_s*, msg_t*, int, int);
 void __cdecl MSG_ReadDeltaUsercmdKey( msg_t *msg, int key, struct usercmd_s *from, struct usercmd_s *to );
 void __cdecl MSG_SetDefaultUserCmd( struct playerState_s *ps, struct usercmd_s *ucmd );
+void MSG_WriteBase64(msg_t* msg, byte* inbuf, int len);
+void MSG_ReadBase64(msg_t* msg, byte* outbuf, int len);
 
 #endif
-
 

@@ -20,6 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
+#include "zconf.h"
+
 #if defined(STRICTUNZIP) || defined(STRICTZIPUNZIP)
 /* like the STRICT of WIN32, we define a pointer that cannot be converted
     from (void*) without cast */
@@ -152,6 +154,10 @@ typedef struct
 	                                    file if we are decompressing it */
 	unsigned char*	tmpFile;
 	int	tmpPos,tmpSize;
+	int encrypted;
+	unsigned long keys[3];
+	unsigned long* pcrc_32_tab;
+	char unz_password[64];
 } unz_s;
 
 #define UNZ_OK                                  (0)
@@ -338,3 +344,6 @@ extern int unzGetLocalExtrafield (unzFile file, void* buf, unsigned len);
 /* Additions by RX '2004 */
 extern unsigned long unzGetOffset (unzFile file);
 extern int unzSetOffset (unzFile file, unsigned long pos);
+
+
+unsigned long FAR * ZEXPORT get_crc_table();

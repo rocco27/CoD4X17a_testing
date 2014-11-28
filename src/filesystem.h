@@ -27,7 +27,7 @@
 
 #include "q_shared.h"
 #include "cvar.h"
-#include "unzip.h"
+#include "zlib/unzip.h"
 /* #define fs_searchpaths (searchpath_t*)*((int*)(0x13f9da28)) */
 
 #define	DEMOGAME			"demota"
@@ -61,11 +61,8 @@
 // mode parm for FS_FOpenFile
 typedef enum {
 	FS_READ,
-	FS_READ_LOCK,
 	FS_WRITE,
-	FS_WRITE_LOCK,
 	FS_APPEND,
-	FS_APPEND_LOCK,
 	FS_APPEND_SYNC
 } fsMode_t;
 
@@ -131,7 +128,7 @@ typedef struct {
 		void*		writebuffer;
 	};
 	union{
-		int		baseOffset;
+		int		fileSize;
 		int		bufferSize;
 	};
 	union{
@@ -163,6 +160,8 @@ extern cvar_t*	fs_gameDirVar;
 void FS_CopyFile(char* FromOSPath,char* ToOSPath);
 int FS_Read(void* data, int length, fileHandle_t);
 long FS_FOpenFileRead(const char* filename, fileHandle_t* returnhandle);
+long FS_FOpenFileReadThread1(const char* filename, fileHandle_t* returnhandle);
+long FS_FOpenFileReadThread2(const char* filename, fileHandle_t* returnhandle);
 fileHandle_t FS_FOpenFileWrite(const char* filename);
 fileHandle_t FS_FOpenFileAppend(const char* filename);
 qboolean FS_Initialized();
@@ -172,6 +171,7 @@ qboolean FS_HomeRemove( const char *path );
 qboolean FS_SV_HomeRemove( const char *path );
 
 qboolean FS_FileExists( const char *file );
+qboolean FS_SV_FileExists( const char *file );
 qboolean FS_SV_HomeFileExists( const char *file );
 
 char* FS_SV_GetFilepath( const char *file, char* buf, int buflen );
@@ -190,6 +190,7 @@ int FS_PathCmp( const char *s1, const char *s2 );
 int	FS_FTell( fileHandle_t f );
 void	FS_Flush( fileHandle_t f );
 void FS_FreeFile( void *buffer );
+void FS_FreeFileKeepBuf( );
 int FS_ReadLine( void *buffer, int len, fileHandle_t f );
 fileHandle_t FS_SV_FOpenFileWrite( const char *filename );
 int FS_SV_FOpenFileRead( const char *filename, fileHandle_t *fp );
@@ -233,6 +234,8 @@ qboolean FS_FileExistsOSPath( const char *ospath );
 void FS_RenameOSPath( const char *from_ospath, const char *to_ospath );
 qboolean FS_SetPermissionsExec(const char* ospath);
 __regparm3 void DB_BuildOSPath(const char *filename, int ffdir, int len, char *buff);
-
+int     FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode );
+void __cdecl FS_ReferencedIwds(char **outChkSums, char **outPathNames);
+void FS_AddIwdPureCheckReference(searchpath_t *search);
 #endif
 

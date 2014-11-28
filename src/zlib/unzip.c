@@ -7,9 +7,9 @@
  *
  *****************************************************************************/
 
-#include "q_shared.h"
-#include "qcommon_mem.h"
-#include "q_platform.h"
+#include "../q_shared.h"
+#include "../qcommon_mem.h"
+#include "../q_platform.h"
 #include "unzip.h"
 
 #include <string.h>
@@ -130,10 +130,9 @@
 #define OF(args)  args
 #endif
 
-typedef unsigned char  Byte;  /* 8 bits */
-typedef unsigned int   uInt;  /* 16 bits or more */
-typedef unsigned long  uLong; /* 32 bits or more */
-typedef Byte    *voidp;
+//typedef unsigned char  Byte;  /* 8 bits */
+//typedef unsigned int   uInt;  /* 16 bits or more */
+//typedef unsigned long  uLong; /* 32 bits or more */
 
 #ifndef SEEK_SET
 #  define SEEK_SET        0       /* Seek from beginning of file.  */
@@ -1394,8 +1393,9 @@ extern unzFile unzOpen (const char* path)
 	us.byte_before_the_zipfile = central_pos -
 		                    (us.offset_central_dir+us.size_central_dir);
 	us.central_pos = central_pos;
-    us.pfile_in_zip_read = NULL;
-	
+	us.pfile_in_zip_read = NULL;
+	us.unz_password[0] = '\0';
+	us.encrypted = 0;
 
 	s=(unz_s*)ALLOC(sizeof(unz_s));
 	*s=us;
@@ -1403,6 +1403,19 @@ extern unzFile unzOpen (const char* path)
 	return (unzFile)s;	
 }
 
+extern int unzSetPassword(unzFile file, const char* password)
+{
+	unz_s* s;
+	if (file==NULL)
+		return UNZ_PARAMERROR;
+	s=(unz_s*)file;
+	if(strlen(password) >= sizeof(s->unz_password))
+	{
+		return UNZ_PARAMERROR;
+	}
+	strncpy(s->unz_password, password, sizeof(s->unz_password));
+	return UNZ_OK;
+}
 
 /*
   Close a ZipFile opened with unzipOpen.
@@ -1770,6 +1783,57 @@ extern int unzLocateFile (unzFile file, const char *szFileName, int iCaseSensiti
 	return err;
 }
 
+#define CRC32(c, b) ((*(pcrc_32_tab+(((int)(c) ^ (b)) & 0xff))) ^ ((c) >> 8))
+
+/***********************************************************************
+ * Return the next byte in the pseudo-random sequence
+ */
+static int decrypt_byte(unsigned long* pkeys, const unsigned long* pcrc_32_tab)
+{
+    unsigned temp;  /* POTENTIAL BUG:  temp*(temp^1) may overflow in an
+                     * unpredictable manner on 16-bit systems; not a problem
+                     * with any known compiler so far, though */
+
+    temp = ((unsigned)(*(pkeys+2)) & 0xffff) | 2;
+    return (int)(((temp * (temp ^ 1)) >> 8) & 0xff);
+}
+
+/***********************************************************************
+ * Update the encryption keys with the next byte of plain text
+ */
+static int update_keys(unsigned long* pkeys,const unsigned long* pcrc_32_tab,int c)
+{
+    (*(pkeys+0)) = CRC32((*(pkeys+0)), c);
+    (*(pkeys+1)) += (*(pkeys+0)) & 0xff;
+    (*(pkeys+1)) = (*(pkeys+1)) * 134775813L + 1;
+    {
+      register int keyshift = (int)((*(pkeys+1)) >> 24);
+      (*(pkeys+2)) = CRC32((*(pkeys+2)), keyshift);
+    }
+    return c;
+}
+
+
+/***********************************************************************
+ * Initialize the encryption keys and the random header according to
+ * the given password.
+ */
+static void init_keys(const char* passwd,unsigned long* pkeys,const unsigned long* pcrc_32_tab)
+{
+    *(pkeys+0) = 305419896L;
+    *(pkeys+1) = 591751049L;
+    *(pkeys+2) = 878082192L;
+    while (*passwd != '\0') {
+        update_keys(pkeys,pcrc_32_tab,(int)*passwd);
+        passwd++;
+    }
+}
+
+#define zdecode(pkeys,pcrc_32_tab,c) \
+    (update_keys(pkeys,pcrc_32_tab,c ^= decrypt_byte(pkeys,pcrc_32_tab)))
+
+#define zencode(pkeys,pcrc_32_tab,c,t) \
+    (t=decrypt_byte(pkeys,pcrc_32_tab), update_keys(pkeys,pcrc_32_tab,c), t^(c))
 
 /*
   Read the static header of the current zipfile
@@ -1873,6 +1937,8 @@ extern int unzOpenCurrentFile (unzFile file)
 	file_in_zip_read_info_s* pfile_in_zip_read_info;
 	uLong offset_local_extrafield;  /* offset of the static extra field */
 	uInt  size_local_extrafield;    /* size of the static extra field */
+	int i;
+	char source[12];
 
 	if (file==NULL)
 		return UNZ_PARAMERROR;
@@ -1950,6 +2016,27 @@ extern int unzOpenCurrentFile (unzFile file)
 
 
 	s->pfile_in_zip_read = pfile_in_zip_read_info;
+
+        if (s->unz_password[0] != '\0')
+        {
+            int suc;
+            s->pcrc_32_tab = get_crc_table();
+            init_keys(s->unz_password,s->keys,s->pcrc_32_tab);
+            if ( fseek(s->file, s->pfile_in_zip_read->pos_in_zipfile + s->pfile_in_zip_read->byte_before_the_zipfile, SEEK_SET) !=0 )
+                return UNZ_INTERNALERROR;
+
+            suc = fread(source, 1, sizeof(source), s->file);
+            if(suc < 12)
+                return UNZ_INTERNALERROR;
+
+            for (i = 0; i < sizeof(source); i++)
+                zdecode(s->keys,s->pcrc_32_tab,source[i]);
+
+            s->pfile_in_zip_read->pos_in_zipfile+=12;
+            s->encrypted=1;
+        }
+
+
     return UNZ_OK;
 }
 
@@ -2010,6 +2097,15 @@ extern int unzReadCurrentFile  (unzFile file, void *buf, unsigned len)
 			if (fread(pfile_in_zip_read_info->read_buffer,uReadThis,1,
                          pfile_in_zip_read_info->file)!=1)
 				return UNZ_ERRNO;
+
+			if(s->encrypted)
+			{
+				uInt i;
+				for(i=0;i<uReadThis;i++)
+				{
+					pfile_in_zip_read_info->read_buffer[i] = zdecode(s->keys,s->pcrc_32_tab, pfile_in_zip_read_info->read_buffer[i]);
+				}
+			}
 			pfile_in_zip_read_info->pos_in_zipfile += uReadThis;
 
 			pfile_in_zip_read_info->rest_read_compressed-=uReadThis;
@@ -4335,3 +4431,4 @@ extern int unzSetOffset (file, pos)
     s->current_file_ok = (err == UNZ_OK);
     return err;
 }
+

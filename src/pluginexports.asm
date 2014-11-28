@@ -77,6 +77,7 @@ pexport Cvar_SetInt
 pexport Cvar_SetBool
 pexport Cvar_SetString
 pexport Cvar_SetFloat
+pexport Cvar_Set
 
 pexport FS_SV_FOpenFileRead
 pexport FS_SV_FOpenFileWrite
@@ -91,7 +92,6 @@ pexport NET_AdrToStringShort
 pexport NET_CompareBaseAdr
 pexport NET_CompareBaseAdrMask
 pexport NET_CompareAdr
-
 ralias Plugin_Milliseconds, Sys_Milliseconds
 
 
@@ -116,12 +116,23 @@ pexport Scr_AddUndefined
 pexport Scr_AddVector
 pexport Scr_AddArray
 pexport Scr_MakeArray
-pexport Scr_Notify
-pexport Scr_NotifyNum
 pexport Scr_ExecEntThread
 pexport Scr_ExecThread
 pexport Scr_FreeThread
 
+pexport Scr_Notify
+pexport Scr_NotifyNum
+pexport Scr_NotifyLevel
+
+pexport Scr_AllocString
+
 pexport G_LogPrintf
 
 pexport SV_GameClientNum
+pexport unzSetPassword
+pexport Cbuf_AddText
+
+pexport SV_GetConfigstring
+pexport SV_SetConfigstring
+
+pexport SL_ConvertToString

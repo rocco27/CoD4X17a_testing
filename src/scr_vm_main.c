@@ -42,7 +42,6 @@ typedef struct{
 
 
 void Scr_AddStockFunctions(){
-
 	Scr_AddFunction("createprintchannel", (void*)0x80bf832, 0);
 	Scr_AddFunction("setprintchannel", (void*)0x80bf75c, 0);
 	Scr_AddFunction("print", (void*)0x80bf706, 0);
@@ -55,7 +54,7 @@ void Scr_AddStockFunctions(){
 	Scr_AddFunction("getent", (void*)0x80c7c72, 0);
 	Scr_AddFunction("getentarray", (void*)0x80c7b44, 0);
 	Scr_AddFunction("spawn", /* (void*)0x80bf638 */ GScr_Spawn, 0);
-	Scr_AddFunction("spawnvehicle", GScr_SpawnVehicle, 0);
+//	Scr_AddFunction("spawnvehicle", GScr_SpawnVehicle, 0);
 	Scr_AddFunction("spawnplane", (void*)0x80c0fde, 0);
 	Scr_AddFunction("spawnturret", (void*)0x80c0f52, 0);
 	Scr_AddFunction("precacheturret", (void*)0x80bcd46, 0);
@@ -127,6 +126,7 @@ void Scr_AddStockFunctions(){
 	Scr_AddFunction("vectornormalize", (void*)0x80c69aa, 0);
 	Scr_AddFunction("vectortoangles", (void*)0x80be762, 0);
 	Scr_AddFunction("vectorlerp", (void*)0x80be6da, 0);
+	Scr_AddFunction("vectoradd", GScr_VectorAdd, 0);
 	Scr_AddFunction("anglestoup", (void*)0x80be8ea, 0);
 	Scr_AddFunction("anglestoright", (void*)0x80be8a0, 0);
 	Scr_AddFunction("anglestoforward", (void*)0x80be856, 0);
@@ -266,16 +266,19 @@ void Scr_AddStockFunctions(){
 	Scr_AddFunction("strrepl", GScr_StrRepl, 0);
 	Scr_AddFunction("strtokbylen", GScr_StrTokByLen, 0);
 	Scr_AddFunction("exec", GScr_CbufAddText, 0);
+	Scr_AddFunction("execex", GScr_CbufAddTextEx, 0);
 	Scr_AddFunction("sha256", GScr_SHA256, 0);
 	Scr_AddFunction("addscriptcommand", GScr_AddScriptCommand, 0);
 
-}
 
+}
 
 
 void Scr_AddStockMethods(){
 	//PlayerCmd
 	Scr_AddMethod("getpower", PlayerCmd_GetPower, 0);
+	Scr_AddMethod("setpower", PlayerCmd_SetPower, 0);
+	Scr_AddMethod("setuid", PlayerCmd_SetUid, 0);
 	Scr_AddMethod("giveweapon", (void*)0x80abc48, 0);
 	Scr_AddMethod("takeweapon", (void*)0x80abbb4, 0);
 	Scr_AddMethod("takeallweapons", (void*)0x80abb0e, 0);
@@ -521,6 +524,8 @@ void Scr_AddStockMethods(){
 	Scr_AddMethod("getgeolocation", PlayerCmd_GetGeoLocation, 0);
 }
 
+
+
 void Scr_InitFunctions()
 {
 
@@ -631,7 +636,6 @@ void GScr_LoadGameTypeScript(void){
 
 
 /**************** Additional *************************/
-    script_CallBacks_new[SCR_CB_SAY] = GScr_LoadScriptAndLabel("maps/mp/gametypes/_callbacksetup", "CodeCallback_PlayerSay", 0);
     script_CallBacks_new[SCR_CB_SCRIPTCOMMAND] = GScr_LoadScriptAndLabel("maps/mp/gametypes/_callbacksetup", "CodeCallback_ScriptCommand", 0);
 }
 
@@ -794,7 +798,7 @@ typedef struct{
 
 
 #define scrStruct (*((scrStruct_t*)(SCRSTRUCT_ADDR)))
-
+#define MAX_CALLSCRIPTSTACKDEPTH 200
 
 __cdecl unsigned int Scr_LoadScript(const char* scriptname, PrecacheEntry *precache, int iarg_02){
 
@@ -810,11 +814,30 @@ __cdecl unsigned int Scr_LoadScript(const char* scriptname, PrecacheEntry *preca
 	unsigned int variable;
 	unsigned int object;
 
+	int i;
+	static unsigned int callScriptStackPtr = 0;
+	static char callScriptStackNames[MAX_QPATH * (MAX_CALLSCRIPTSTACKDEPTH + 1)];
+
+	Q_strncpyz(&callScriptStackNames[MAX_QPATH * callScriptStackPtr], scriptname, MAX_QPATH);
+
+	if(callScriptStackPtr >= MAX_CALLSCRIPTSTACKDEPTH)
+	{
+		Com_Printf("Called too many scripts in chain\nThe scripts are:\n");
+		for(i = MAX_CALLSCRIPTSTACKDEPTH; i >= 0 ; --i)
+		{
+			Com_Printf("*%d: %s\n", i, &callScriptStackNames[MAX_QPATH * i]);
+		}
+		Com_Error(ERR_FATAL, "CallscriptStack overflowed");
+		return 0;
+	}
+
+	++callScriptStackPtr;
 
 	handle = Scr_CreateCanonicalFilename(scriptname);
 
 	if(FindVariable(scrStruct.var_03, handle))
 	{
+		--callScriptStackPtr;
 
 		SL_RemoveRefToString(handle);
 		variable = FindVariable(scrStruct.var_04, handle);
@@ -851,6 +874,7 @@ __cdecl unsigned int Scr_LoadScript(const char* scriptname, PrecacheEntry *preca
 
 		if(!scr_buffer_handle)
 		{
+			--callScriptStackPtr;
 			return 0;
 		}
 
@@ -871,6 +895,8 @@ __cdecl unsigned int Scr_LoadScript(const char* scriptname, PrecacheEntry *preca
 		scrStruct.var_12 = old_var12;
 		scrStruct.var_08 = old_var08;
 		
+		--callScriptStackPtr;
+
 		return object;
 	}
 }
@@ -1152,4 +1178,150 @@ void GetHuffmanArray(){
     Com_Quit_f();
 }
 */
+
+int GetArraySize(int aHandle)
+{
+    int size = scrVarGlob.variables[aHandle].value.typeSize.size;
+    return size;
+}
+
+/* only for debug */
+__regparm3 void VM_Notify_Hook(int entid, int constString, variableValue_t* arguments)
+{
+    Com_Printf("^2Notify Entitynum: %d, EventString: %s\n", entid, SL_ConvertToString(constString));
+    VM_Notify(entid, constString, arguments);
+}
+
+void Scr_InitSystem()
+{
+  scrVarPub.dword18 = AllocObject();
+  scrVarPub.dword1C = Scr_AllocArray();
+  scrVarPub.varLevel = AllocObject();
+  scrVarPub.dword28 = AllocObject();
+  scrVarPub.dword14 = 0;
+  g_script_error_level = -1;
+}
+
+void Scr_ClearArguments()
+{
+    while(scrVmPub.numParams)
+    {
+        RemoveRefToValue(scrVmPub.argumentVariables->varType, scrVmPub.argumentVariables->value);
+        --scrVmPub.argumentVariables;
+        --scrVmPub.numParams;
+    }
+}
+
+void Scr_NotifyInternal(int varNum, int constString, int numArgs)
+{
+  variableValue_t *curArg;
+  int z;
+  int ctype;
+
+  Scr_ClearArguments();
+  curArg = scrVmPub.argumentVariables - numArgs;
+  z = scrVmPub.field_18 - numArgs;
+  if ( varNum )
+  {
+    ctype = curArg->varType;
+    curArg->varType = 8;
+    scrVmPub.field_18 = 0;
+    VM_Notify(varNum, constString, scrVmPub.argumentVariables);
+    curArg->varType = ctype;
+  }
+  while( scrVmPub.argumentVariables != curArg )
+  {
+    RemoveRefToValue(scrVmPub.argumentVariables->varType, scrVmPub.argumentVariables->value);
+    --scrVmPub.argumentVariables;
+  }
+  scrVmPub.field_18 = z;
+}
+
+
+void Scr_NotifyLevel(int constString, unsigned int numArgs)
+{
+    Scr_NotifyInternal(scrVarPub.varLevel, constString, numArgs);
+}
+
+
+void Scr_NotifyNum(int entityNum, unsigned int entType, unsigned int constString, unsigned int numArgs)
+{
+    int entVarNum;
+
+
+    entVarNum = FindEntityId(entityNum, entType);
+
+    Scr_NotifyInternal(entVarNum, constString, numArgs);
+
+}
+
+void Scr_Notify(gentity_t* ent, unsigned short constString, unsigned int numArgs)
+{
+    Scr_NotifyNum(ent->s.number, 0, constString, numArgs);
+}
+
+
+void RuntimeError_Debug(char *msg, char *a3, int a4)
+{
+  int i;
+
+  Com_Printf("\n^1******* script runtime error *******\n%s: ", msg);
+  Scr_PrintPrevCodePos(0, a3, a4);
+  if ( scrVmPub.field_8 )
+  {
+    for(i = scrVmPub.field_8 - 1; i > 0; --i)
+	{
+        Com_Printf("^1called from:\n");
+        Scr_PrintPrevCodePos(0, scrVmPub.backtrace[i].field_0, scrVmPub.backtrace[i].field_4 == 0);
+	}
+    Com_Printf("^1started from:\n");
+    Scr_PrintPrevCodePos(0, scrVmPub.backtrace[0].field_0, 1);
+  }
+  Com_Printf("^1************************************\n");
+}
+
+
+
+void RuntimeError(char *a3, int arg4, char *message, char *a4)
+{
+	int errtype;
+
+
+	if ( !scrVarPub.field_6 && !scrVmPub.field_16 )
+	{
+		return;
+	}
+
+	if ( scrVmPub.field_14 )
+	{
+		Com_Printf("%s\n", message);
+		if ( !scrVmPub.field_16 )
+		{
+			return;
+		}
+	}else{
+		RuntimeError_Debug(message, a3, arg4);
+		if ( !scrVmPub.field_15 && !scrVmPub.field_16 )
+		{
+			return;
+		}
+	}
+
+	if(scrVmPub.field_16)
+	{
+		errtype = 5;
+	}else{
+		errtype = 4;
+	}
+
+	if ( a4 )
+	{
+	    Com_Error(errtype, "script runtime error\n(see console for details)\n%s\n%s", message, a4);
+	}
+	else
+	{
+	    Com_Error(errtype, "script runtime error\n(see console for details)\n%s", message);
+	}
+}
+
 

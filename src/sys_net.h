@@ -44,7 +44,7 @@ NET
 #define	PORT_ANY		-1
 
 #ifndef _WIN32
-	#define SOCKET_DEBUG
+	//#define SOCKET_DEBUG
 #endif
 
 typedef enum {
@@ -123,6 +123,7 @@ void NET_TcpServerInit(void);
 int NET_TcpClientConnect( const char *remoteAdr );
 int NET_TcpClientGetData(int sock, void* buf, int *buflen);
 void NET_TcpCloseSocket(int socket);
+const char* NET_GetHostAddress(char* adrstrbuf, int len);
 
 typedef enum {
 	TCP_AUTHWAIT,

@@ -34,20 +34,22 @@
 #include "cvar.h"
 #include "misc.h"
 #include "sha256.h"
+#include "sv_auth.h"
 
 #include <string.h>
 #include <time.h>
 #include "plugin_handler.h"
+
+
 /*
 ============
 PlayerCmd_GetUid
 
 Returns the players Uid. Will only work with valid defined authserver or if another cod4-plugin is loaded with uid support.
-If server supports no UIDs this function will return -1
+If no UID is defined this function will return -1
 Usage: int = self getUid();
 ============
 */
-
 
 void PlayerCmd_GetUid(scr_entref_t arg){
 
@@ -86,6 +88,54 @@ void PlayerCmd_GetUid(scr_entref_t arg){
 }
 
 
+/*
+============
+PlayerCmd_SetUid
+
+Sets the players Uid.
+Usage: int = self setUid(uid <integer>);
+============
+*/
+
+void PlayerCmd_SetUid(scr_entref_t arg){
+
+    gentity_t* gentity;
+    int entityNum = 0;
+    int uid;
+    mvabuf;
+
+
+    if(HIWORD(arg)){
+
+        Scr_ObjectError("Not an entity");
+
+    }else{
+
+        entityNum = LOWORD(arg);
+        gentity = &g_entities[entityNum];
+
+        if(!gentity->client){
+            Scr_ObjectError(va("Entity: %i is not a player", entityNum));
+        }
+    }
+    if(Scr_GetNumParam() != 1){
+        Scr_Error("Usage: self setUid(<integer>)\n");
+    }
+
+    uid = Scr_GetInt(0);
+
+    if(uid >= 10000000)
+    {
+        Scr_Error("setUid: has to be in range between 0 and 9999999\n");
+    }
+
+    SV_SetUid(entityNum, uid + 100000000);
+
+    Scr_AddInt( uid + 100000000 );
+}
+
+
+
 void PlayerCmd_GetPower(scr_entref_t arg){
 
     gentity_t* gentity;
@@ -113,9 +163,48 @@ void PlayerCmd_GetPower(scr_entref_t arg){
     }
     cl = &svs.clients[entityNum];
 
-    power = SV_RemoteCmdGetClPower(cl);
+    power = cl->power;
 
     Scr_AddInt(power);
+}
+
+
+void PlayerCmd_SetPower(scr_entref_t arg){
+
+    gentity_t* gentity;
+    int entityNum = 0;
+    int power;
+    client_t *cl;
+	mvabuf;
+
+
+    if(HIWORD(arg)){
+
+        Scr_ObjectError("Not an entity");
+
+    }else{
+
+        entityNum = LOWORD(arg);
+        gentity = &g_entities[entityNum];
+
+        if(!gentity->client){
+            Scr_ObjectError(va("Entity: %i is not a player", entityNum));
+        }
+    }
+    if(Scr_GetNumParam() != 1){
+        Scr_Error("Usage: self setPower(<integer>)\n");
+    }
+    cl = &svs.clients[entityNum];
+
+    power = Scr_GetInt(0);
+
+    if(power < 1 || power > 100)
+    {
+        Scr_Error("setPower: has to be in range between 1 and 100\n");
+    }
+
+    cl->power = power;
+
 }
 
 
@@ -1148,16 +1237,52 @@ void GScr_SHA256(){
 }
 
 
-
-
 /*
 ============
-GScr_CbufAddText
+GScr_CbufExecText
 
-Execute the given command on server as console command
-Usage: void = exec(string <string>);
+Execute the given command on server as console command and returns the response as string
+Usage: string = exec(string <string>);
 ============
 */
+char cmd_exec_redirect_buf[1024];
+
+void GScr_CbufExecRedirect(char* data, qboolean lastcommand)
+{
+    if(cmd_exec_redirect_buf[0] == '\0')
+    {
+        Q_strncpyz(cmd_exec_redirect_buf, data, sizeof(cmd_exec_redirect_buf));
+    }
+}
+
+void GScr_CbufAddTextEx(){
+
+    char string[1024];
+    char outputbuf[1024];
+
+    if(Scr_GetNumParam() != 1){
+        Scr_Error("Usage: execex(<string>)\n");
+    }
+    Com_sprintf(string, sizeof(string), "%s\n",Scr_GetString(0));
+
+    cmd_exec_redirect_buf[0] = '\0';
+
+    if(!Q_stricmpn(string, "map", 3) || !Q_stricmpn(string, "fast_restart", 12))
+    {
+
+        Cbuf_AddText( string );
+
+    }else{
+
+        Com_BeginRedirect(outputbuf, sizeof(outputbuf), GScr_CbufExecRedirect);
+        Cmd_ExecuteSingleCommand(0,0, string);
+        Com_EndRedirect();
+        cmd_exec_redirect_buf[sizeof(cmd_exec_redirect_buf) -1] = '\0';
+
+    }
+
+    Scr_AddString( cmd_exec_redirect_buf );
+}
 
 void GScr_CbufAddText(){
 
@@ -1167,7 +1292,10 @@ void GScr_CbufAddText(){
         Scr_Error("Usage: exec(<string>)\n");
     }
     Com_sprintf(string, sizeof(string), "%s\n",Scr_GetString(0));
-    Cbuf_AddText( string);
+
+
+    Cbuf_AddText( string );
+
 }
 
 
@@ -1922,7 +2050,7 @@ void GScr_SetCvar()
 {
   const char *newstringval;
   const char *var_name;
-  char buffer[1024];
+  char buffer[8192];
   mvabuf;
 
 
@@ -2059,13 +2187,13 @@ void GScr_ScriptCommandCB()
 
     if(Cmd_Argc() == 1)
     {
-        Scr_ScriptCommand(SV_RemoteCmdGetInvokerClnum(), Cmd_Argv(0), "");
+        Scr_ScriptCommand(Cmd_GetInvokerClnum(), Cmd_Argv(0), "");
 
     }else{
 
         Cmd_Argsv(1, buffer, sizeof(buffer));
 
-        Scr_ScriptCommand(SV_RemoteCmdGetInvokerClnum(), Cmd_Argv(0), buffer);
+        Scr_ScriptCommand(Cmd_GetInvokerClnum(), Cmd_Argv(0), buffer);
     }
 }
 
@@ -2088,8 +2216,7 @@ void GScr_AddScriptCommand()
         return;
     }
 
-    Cmd_AddCommandGeneric(command, NULL, GScr_ScriptCommandCB, qfalse);
-    Cmd_SetPower(command, defaultpower);
+    Cmd_AddCommandGeneric(command, NULL, GScr_ScriptCommandCB, qfalse, defaultpower);
 
 }
 
@@ -2115,7 +2242,7 @@ void GScr_Spawn()
 
 	gentity = G_Spawn();
 
-	Scr_SetString((unsigned short*)&gentity->constClassname, (unsigned short)strindex);
+	Scr_SetString((unsigned short*)&gentity->classname, (unsigned short)strindex);
 
 	gentity->r.currentOrigin[0] = origin[0];
 	gentity->r.currentOrigin[1] = origin[1];
@@ -2157,7 +2284,7 @@ void GScr_SpawnHelicopter()
 
   newent = G_Spawn();
 
-  Scr_SetString((unsigned short*)&newent->constClassname, (unsigned short)stringIndex.script_vehicle);
+  Scr_SetString((unsigned short*)&newent->classname, (unsigned short)stringIndex.script_vehicle);
 
   newent->r.currentOrigin[0] = position[0];
   newent->r.currentOrigin[1] = position[1];
@@ -2171,7 +2298,7 @@ void GScr_SpawnHelicopter()
   Scr_AddEntity(newent);
 }
 
-
+/*
 void GScr_SpawnVehicle()
 {
 
@@ -2193,7 +2320,7 @@ void GScr_SpawnVehicle()
 
 	gentity = G_Spawn();
 
-	Scr_SetString((unsigned short*)&gentity->constClassname, (unsigned short)stringIndex.script_vehicle);
+	Scr_SetString((unsigned short*)&gentity->classname, (unsigned short)stringIndex.script_vehicle);
 
 	gentity->r.currentOrigin[0] = origin[0];
 	gentity->r.currentOrigin[1] = origin[1];
@@ -2205,11 +2332,40 @@ void GScr_SpawnVehicle()
         Q_strncpyz(vehModel, Scr_GetString(3), sizeof(vehModel));
 
         G_SetModel(gentity, vehModel);
-
+//	G_VehCollmapSpawner( gentity );
 	SpawnVehicle( gentity, vehTypeStr );
-	G_VehCollmapSpawner( gentity );
+//	gentity->s.eType = 12;
+//	gentity->r.contents = 0x2080;
 	Scr_AddEntity( gentity );
 }
+*/
+
+void GScr_VectorAdd()
+{
+
+	vec3_t vec;
+	float x, y, z;
+
+	if ( Scr_GetNumParam() != 4 )
+	{
+		Scr_Error("Usage: vectoradd <vector>, <x>, <y>, <z>");
+		return;
+	}
+
+	Scr_GetVector(0, vec);
+	x = Scr_GetFloat(1);
+	y = Scr_GetFloat(2);
+	z = Scr_GetFloat(3);
+
+	vec[0] += x;
+	vec[1] += y;
+	vec[2] += z;
+
+	Scr_AddVector( vec );
+}
+
+
+
 
 /*
 void ScrCmd_SetStance(scr_entref_t arg){

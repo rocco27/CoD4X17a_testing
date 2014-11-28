@@ -18,7 +18,7 @@ New Script_Callbacks
 ============================
 "CodeCallback_PlayerSayCmd(string <text>, bool <teamchat>)" --> This functionality has been dropped! Another solution to catch commands is now CodeCallback_ScriptCommand().
 
-"CodeCallback_PlayerSayAll(string <text>, bool <teamchat>)" --> "CodeCallback_PlayerSay(string <text>, bool <teamchat>)"
+"CodeCallback_PlayerSayAll(string <text>, bool <teamchat>)" --> This functionality has been dropped! Another solution to catch commands is now CodeCallback_ScriptCommand().
 Gets called after a player types into chat anything
 Both functions will put at 1st argument the text from player. The player entity will be available too with the "self" prefix
 The 2nd argument will be either true = teamchat or false = chat to all
@@ -47,12 +47,6 @@ Functions on Players
 ==========================================
 
 
-GetUid
-============================
-Returns the players Uid. Will only work with valid secondary authserver and in sv_authorizemode = 1
-Usage: int = self getUid();
-
-
 GetUserinfo
 ============================
 Returns the players userinfo value.
@@ -69,11 +63,26 @@ GetPing
 Returns the current measured scoreboard ping of this player.
 Usage: int = self getPing();
 
-
 GetPower
 ============================
 Returns the admin power for this player. Default is 1
 Usage: int = self getPower();
+
+GetUid
+============================
+Returns uid (if one exists) for this player else it returns -1.
+Usage: int = self getUid();
+
+SetUid
+============================
+Sets the uid for this player.
+Usage: self setUid( <int> );
+
+SetPower
+============================
+Sets the power for this player. (Not recommended to use. The overall behaviour is not known). Don't set non admins above level 9
+In range 2 to 100
+Usage: self setPower( <int> );
 
 
 GetGeoLocation
@@ -92,7 +101,7 @@ Three character country code will be used: USA, FRA, CAN, IND...
 
 type: 2
 The return type is string.
-Full countryname will be used: United Staates, France, Canada, India...
+Full countryname will be used: United States, France, Canada, India...
 
 type: 3
 The return type is string.
@@ -140,10 +149,15 @@ General purpose functions
 
 =========================================
 
+execex
+==========================
+Executes the given command on server as console command and returns results
+Usage: string = execex(string <string>);
+
 exec
 ==========================
 Executes the given command on server as console command
-Usage: void = exec(string <string>);
+Usage: exec(string <string>);
 
 addScriptCommand
 ==========================

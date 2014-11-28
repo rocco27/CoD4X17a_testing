@@ -333,7 +333,7 @@ static cmd_function_t *cmd_functions;
 Cmd_AddCommand
 ============
 */
-qboolean Cmd_AddCommandGeneric( const char *cmd_name, const char* helptext, xcommand_t function, qboolean warn ) {
+qboolean Cmd_AddCommandGeneric( const char *cmd_name, const char* helptext, xcommand_t function, qboolean warn, int power ) {
 
 	cmd_function_t  *cmd;
 
@@ -359,19 +359,25 @@ qboolean Cmd_AddCommandGeneric( const char *cmd_name, const char* helptext, xcom
 	strcpy((char*)(cmd +1), cmd_name);
 	cmd->name = (char*)(cmd +1);
 	cmd->function = function;
+	cmd->minPower = power;
 	cmd->next = cmd_functions;
 	cmd_functions = cmd;
 	return qtrue;
 }
 
-qboolean Cmd_AddCommand( const char *cmd_name, xcommand_t function )
+qboolean Cmd_AddPCommand( const char *cmd_name, xcommand_t function, int power )
 {
-    return Cmd_AddCommandGeneric( cmd_name, NULL, function, qtrue );
+    return Cmd_AddCommandGeneric( cmd_name, NULL, function, qtrue, power);
 }
 
-qboolean Cmd_AddHCommand( const char *cmd_name, const char* helptext, xcommand_t function )
+qboolean Cmd_AddCommand( const char *cmd_name, xcommand_t function )
 {
-    return Cmd_AddCommandGeneric( cmd_name, NULL, function, qtrue );
+    return Cmd_AddCommandGeneric( cmd_name, NULL, function, qtrue, 100);
+}
+
+qboolean Cmd_AddHCommand( const char *cmd_name, const char* helptext, xcommand_t function, int power )
+{
+    return Cmd_AddCommandGeneric( cmd_name, NULL, function, qtrue, power );
 }
 
 
@@ -1044,6 +1050,39 @@ void	Cmd_ExecuteString( const char *text )
 	if(!Q_stricmpn(arg0, "dvar", 4))
 	{
 		arg0[0] = 'c';
+	}else if(!Q_stricmpn(arg0, "auth", 4)){
+		if(!Q_stricmp(arg0, "authlogin"))
+		{
+			Q_strncpyz(arg0, "login", sizeof(arg0));
+			Com_PrintWarning("\"authlogin\" is deprecated and will be removed soon. Use \"login\" instead\n");
+		}
+		else if(!Q_stricmp(arg0, "authChangePassword"))
+		{
+			Q_strncpyz(arg0, "changePassword", sizeof(arg0));
+			Com_PrintWarning("\"authchangePassword\" is deprecated and will be removed soon. Use \"changePassword\" instead\n");
+		}
+		else if(!Q_stricmp(arg0, "authSetAdmin"))
+		{
+			Q_strncpyz(arg0, "AdminAddAdminWithPassword", sizeof(arg0));
+			Com_PrintWarning("\"authSetAdmin\" is deprecated and will be removed soon. Use \"AdminAddAdminWithPassword\" instead\n");
+		}
+		else if(!Q_stricmp(arg0, "authUnsetAdmin"))
+		{
+			Q_strncpyz(arg0, "AdminRemoveAdmin", sizeof(arg0));
+			Com_PrintWarning("\"authUnsetAdmin\" is deprecated and will be removed soon. Use \"AdminRemoveAdmin\" instead\n");
+		}
+		else if(!Q_stricmp(arg0, "authListAdmins"))
+		{
+			Q_strncpyz(arg0, "adminListAdmins", sizeof(arg0));
+			Com_PrintWarning("\"authListAdmins\" is deprecated and will be removed soon. Use \"adminListAdmins\" instead\n");
+		}
+	}else if(!Q_stricmp(arg0, "cmdpowerlist")){
+		Q_strncpyz(arg0, "AdminListCommands", sizeof(arg0));
+		Com_PrintWarning("\"cmdpowerlist\" is deprecated and will be removed soon. Use \"AdminListCommands\" instead\n");
+	}
+	else if(!Q_stricmp(arg0, "setCmdMinPower")){
+		Q_strncpyz(arg0, "AdminChangeCommandPower", sizeof(arg0));
+		Com_PrintWarning("\"setCmdMinPower\" is deprecated and will be removed soon. Use \"AdminChangeCommandPower\" instead\n");
 	}
 	// check registered command functions	
 	for ( prev = &cmd_functions ; *prev ; prev = &cmd->next ) {
@@ -1117,8 +1156,8 @@ static void Cmd_List_f( void ) {
 	i = 0;
 	for ( cmd = cmd_functions ; cmd ; cmd = cmd->next ) {
 		if ( (match && !Com_Filter( match, (char*)cmd->name, qfalse )) 
-			|| SV_RemoteCmdGetInvokerPower() < cmd->minPower
-			|| ((cmd->minPower == 0) && SV_RemoteCmdGetInvokerPower() != 100))
+			|| Cmd_GetInvokerPower() < cmd->minPower
+			|| ((cmd->minPower == 0) && Cmd_GetInvokerPower() != 100))
 		{
 			continue;
 		}
@@ -1171,7 +1210,6 @@ static void Cmd_Help_f( void ) {
 Cmd_CompleteCfgName
 ==================
 */
-
 /*
 void Cmd_CompleteCfgName( char *args, int argNum ) {
 	if( argNum == 2 ) {
@@ -1179,14 +1217,62 @@ void Cmd_CompleteCfgName( char *args, int argNum ) {
 	}
 }
 */
+
+/*
+ ============================================
+ For holding the state of powers
+ ============================================
+ */
+
+typedef struct{
+	int		currentCmdPower;			//used to set an execution permissionlevel - Default is 100 but if users execute commands it will be the users level
+	int		currentCmdInvoker;			//used to set an Invoker UID - Default is 0 but if users execute commands it will be his own UID
+	int		clientnum;				//Clientnum will be -1 if rcon is used
+	qboolean	authserver;
+}cmdInvoker_t;
+
+static cmdInvoker_t cmdInvoker;
+
+
+int Cmd_GetInvokerUID()
+{
+    return cmdInvoker.currentCmdInvoker;
+}
+
+int Cmd_GetInvokerClnum()
+{
+    return cmdInvoker.clientnum;
+}
+
+
+int Cmd_GetInvokerPower()
+{
+    return cmdInvoker.currentCmdPower;
+}
+
+void Cmd_SetCurrentInvokerInfo(int uid, int power, int client)
+{
+    cmdInvoker.currentCmdPower = power;
+    cmdInvoker.currentCmdInvoker = uid;
+    cmdInvoker.clientnum = client;
+}
+
+
+void Cmd_ResetInvokerInfo()
+{
+    cmdInvoker.currentCmdPower = 100;
+    cmdInvoker.currentCmdInvoker = -1;
+    cmdInvoker.clientnum = -1;
+}
+
 void Cmd_Init( void ) {
 
-	Cmd_AddCommand( "cmdlist",Cmd_List_f );
-	Cmd_AddCommand( "cmdpowerlist", Cmd_ListPower_f );
-	Cmd_AddCommand( "exec",Cmd_Exec_f );
+	Cmd_AddPCommand( "cmdlist", Cmd_List_f, 1);
+	Cmd_AddPCommand( "AdminListCommands", Cmd_ListPower_f, 95);
+	Cmd_AddPCommand( "exec",Cmd_Exec_f, 98 );
 	Cmd_AddCommand( "vstr",Cmd_Vstr_f );
 	Cmd_AddCommand( "echo",Cmd_Echo_f );
 	Cmd_AddCommand( "wait", Cmd_Wait_f );
+	Cmd_ResetInvokerInfo();
 	//Cmd_AddCommand( "help", Cmd_Help_f ); Not ready yet
-
 }

@@ -101,7 +101,7 @@ called to open a channel to a remote system
 ==============
 */
 
-void Netchan_Setup( netsrc_t sock, netchan_t *chan, netadr_t adr, int qport , byte* unsentBuffer, int unsentBufferSize, byte* fragmentBuffer, int fragmentBufferSize){
+void Netchan_Setup( netsrc_t sock, netchan_t *chan, netadr_t adr, unsigned int qport , byte* unsentBuffer, int unsentBufferSize, byte* fragmentBuffer, int fragmentBufferSize){
 
 	memset( chan, 0, sizeof( netchan_t ) );
 
@@ -221,9 +221,7 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 		// if we missed a fragment, dump the message
 		if ( fragmentStart != chan->fragmentLength ) {
 			if ( showdrop->boolean || showpackets->boolean ) {
-				Com_Printf( "%s:Dropped a message fragment\n"
-							, NET_AdrToString( &chan->remoteAddress )
-							, sequence );
+				Com_Printf( "%s:Dropped a message fragment seq: %d\n", NET_AdrToString( &chan->remoteAddress ), sequence );
 			}
 			// we can still keep the part that we have so far,
 			// so we don't need to clear chan->fragmentLength
@@ -232,11 +230,12 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 
 		// copy the fragment to the fragment buffer
 		if ( fragmentLength < 0 || msg->readcount + fragmentLength > msg->cursize 
-			|| chan->fragmentLength + fragmentLength > chan->fragmentBufferSize) {
-
+		    || chan->fragmentLength + fragmentLength > chan->fragmentBufferSize)
+		{
 			if ( showdrop->boolean || showpackets->boolean ) {
-				Com_Printf( "%s:illegal fragment length: Current %i \n, fragmentLength"
-							, NET_AdrToString( &chan->remoteAddress ) );
+				Com_Printf( "%s:illegal fragment length: Current %i Fragment length %i Max %i\n",
+						NET_AdrToString( &chan->remoteAddress ), chan->fragmentLength,
+						fragmentLength, chan->fragmentBufferSize);
 			}
 			return qfalse;
 		}
@@ -251,9 +250,7 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 		}
 
 		if ( chan->fragmentLength > msg->maxsize ) {
-			Com_Printf( "%s:fragmentLength %i > msg->maxsize\n"
-					, NET_AdrToString( &chan->remoteAddress ),
-						chan->fragmentLength );
+			Com_Printf( "%s:fragmentLength %i > msg->maxsize\n", NET_AdrToString( &chan->remoteAddress ), chan->fragmentLength );
 			return qfalse;
 		}
 
@@ -360,7 +357,7 @@ qboolean Netchan_Transmit( netchan_t *chan, int length, const byte *data ) {
 	qboolean sendsucc;
 	byte send_buf[MAX_PACKETLEN];
 
-	if ( length > MAX_MSGLEN ) {
+	if ( length > chan->unsentBufferSize ) {
 		Com_Error( ERR_DROP, "Netchan_Transmit: length = %i", length );
 	}
 	chan->unsentFragmentStart = 0;
@@ -601,7 +598,7 @@ return values:
 -2: Got new data + Connection closed
 ================
 */
-int NET_ReceiveData( int sock, msg_t* msg) {
+int NET_TcpReceiveData( int sock, msg_t* msg) {
 
 	int len = msg->maxsize - msg->cursize;
 	int ret;

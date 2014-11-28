@@ -31,7 +31,7 @@
 #include "net_game_conf.h"
 #include "plugin_handler.h"
 
-void NET_UDPPacketEvent(netadr_t* from, void* data, int len)
+void NET_UDPPacketEvent(netadr_t* from, void* data, int len, int buflen)
 {
 
         msg_t msg;
@@ -45,10 +45,10 @@ void NET_UDPPacketEvent(netadr_t* from, void* data, int len)
 
         msg.data = data;
         msg.cursize = len;
-        msg.maxsize = len;
+        msg.maxsize = buflen;
         msg.readcount = 0;
         msg.bit = 0;
-        msg.readonly = qtrue;
+        msg.readonly = qfalse;
         msg.overflowed = qfalse;
 
         SV_PacketEvent(from, &msg);
@@ -113,7 +113,7 @@ tcpclientstate_t NET_TCPAuthPacketEvent(netadr_t* from, byte* bufData, int len, 
         msg.readonly = qtrue;
         msg.overflowed = qfalse;
 
-        Com_DPrintf("Packet event from: %s\n", NET_AdrToString(from));
+        Com_DPrintf("Auth Packet event from: %s\n", NET_AdrToString(from));
 
         for(i = 0; i < MAX_TCPEVENTS; i++)
         {
@@ -137,6 +137,9 @@ void NET_TCPPacketEvent(netadr_t* from, byte* bufData, int len, int connectionId
         int i;
         msg_t msg;
 
+		Com_DPrintf("Packet event from: %s\n", NET_AdrToString(from));
+
+	
         for(i = 0; i < MAX_TCPEVENTS; i++)
         {
             if(tcpevents[i].serviceId == serviceId)
@@ -158,7 +161,7 @@ void NET_TCPPacketEvent(netadr_t* from, byte* bufData, int len, int connectionId
             }
         }
 
-        Com_PrintError("NET_TCPPacketEvent: Bad serviceId: %d\n", serviceId);
+        Com_PrintError("NET_TCPPacketEvent: Bad serviceId: %x\n", serviceId);
         NET_TcpCloseSocket(from->sock);
         return; //Close connection
 }

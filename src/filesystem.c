@@ -207,6 +207,7 @@ or configs will never get loaded from disk!
 #include "sys_main.h"
 #include "cmd.h"
 #include "sys_thread.h"
+#include "plugin_handler.h"
 
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -250,13 +251,15 @@ static char lastValidBase[MAX_OSPATH];
 static char lastValidGame[MAX_OSPATH];
 
 
+static int fs_numServerIwds;
+static int fs_serverIwds[1024];
+static char *fs_serverIwdNames[1024];
+
+
 #define FS_ListFiles( dir, extension, nfiles ) Sys_ListFiles(dir, extension, 0, nfiles, 0)
 #define FS_FreeFileList Sys_FreeFileList
 
 /*
-typedef int (__cdecl *tFS_ReadFile)(const char* qpath, void **buffer);
-tFS_ReadFile FS_ReadFile = (tFS_ReadFile)(0x818bb8c);
-
 typedef void (__cdecl *tFS_WriteFile)(const char* qpath, const void *buffer, int size);
 tFS_WriteFile FS_WriteFile = (tFS_WriteFile)(0x818a58c);
 
@@ -271,9 +274,6 @@ tFS_Write FS_Write = (tFS_Write)(0x8186ec4);
 
 typedef int (__cdecl *tFS_Read)(void const* data,int length, fileHandle_t);
 tFS_Read FS_Read = (tFS_Read)(0x8186f64);
-
-typedef int (__cdecl *tFS_FOpenFileByMode)(const char *qpath, fileHandle_t *f, fsMode_t mode);
-tFS_FOpenFileByMode FS_FOpenFileByMode = (tFS_FOpenFileByMode)(0x818ba98);
 */
 
 
@@ -683,6 +683,32 @@ qboolean FS_SV_HomeFileExists( const char *file )
 	char testpath[MAX_OSPATH];
 
 	FS_BuildOSPathForThread( fs_homepath->string, file, "", testpath, 0);
+	FS_StripTrailingSeperator( testpath );
+
+	f = fopen( testpath, "rb" );
+	if (f) {
+		fclose( f );
+		return qtrue;
+	}
+	return qfalse;
+}
+
+qboolean FS_SV_FileExists( const char *file )
+{
+	FILE *f;
+	char testpath[MAX_OSPATH];
+
+	FS_BuildOSPathForThread( fs_homepath->string, file, "", testpath, 0);
+	FS_StripTrailingSeperator( testpath );
+
+	f = fopen( testpath, "rb" );
+	if (f) {
+		fclose( f );
+		return qtrue;
+	}
+
+	FS_BuildOSPathForThread( fs_basepath->string, file, "", testpath, 0);
+	FS_StripTrailingSeperator( testpath );
 
 	f = fopen( testpath, "rb" );
 	if (f) {
@@ -1095,6 +1121,8 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 	int		err;
 	unz_file_info	file_info;
 	mvabuf;
+	char *noReferenceExts[] = { "cod4_lnxded-bin", ".so", ".dll", ".hlsl", ".txt", ".cfg", ".levelshots", ".menu", ".arena", ".str", NULL };
+	char **testExt;
 
 
 	if(filename == NULL)
@@ -1224,18 +1252,20 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 					// from every pk3 file.. 
 					len = strlen(filename);
 
+
 					if (!(pak->referenced & FS_GENERAL_REF))
 					{
-						if(!FS_IsExt(filename, ".shader", len) &&
-						   !FS_IsExt(filename, ".txt", len) &&
-						   !FS_IsExt(filename, ".cfg", len) &&
-						   !FS_IsExt(filename, ".config", len) &&
-						   !FS_IsExt(filename, ".bot", len) &&
-						   !FS_IsExt(filename, ".arena", len) &&
-						   !FS_IsExt(filename, ".menu", len) &&
-						   !strstr(filename, "levelshots"))
+						for(testExt = noReferenceExts; *testExt; ++testExt)
+						{
+							if(FS_IsExt(filename, *testExt, len))
+							{
+								break;
+							}
+						}
+						if(*testExt == NULL)
 						{
 							pak->referenced |= FS_GENERAL_REF;
+							FS_AddIwdPureCheckReference(search);
 						}
 					}
 
@@ -1260,7 +1290,10 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 					unzSetOffset(fsh[*file].handleFiles.file.z, pakFile->pos);
 
 					// open the file in the zip
-					unzOpenCurrentFile(fsh[*file].handleFiles.file.z);
+					if(unzOpenCurrentFile(fsh[*file].handleFiles.file.z) != UNZ_OK)
+					{
+						Com_PrintError("FS_FOpenFileReadDir: Failed to open Zip-File\n");
+					}
 					fsh[*file].zipFilePos = pakFile->pos;
 
 					Sys_LeaveCriticalSection(CRIT_FILESYSTEM);
@@ -1332,7 +1365,7 @@ Used for streaming data out of either a
 separate file or a ZIP file.
 ===========
 */
-long FS_FOpenFileRead(const char *filename, fileHandle_t *file)
+long FS_FOpenFileReadForThread(const char *filename, fileHandle_t *file, int fsThread)
 {
 	searchpath_t *search;
 	long len;
@@ -1345,7 +1378,7 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file)
 	
 	for(search = fs_searchpaths; search; search = search->next)
 	{
-	        len = FS_FOpenFileReadDir(filename, search, file, 0, qfalse, 0);
+	        len = FS_FOpenFileReadDir(filename, search, file, 0, qfalse, fsThread);
 	
 	        if(file == NULL)
 	        {
@@ -1374,8 +1407,23 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file)
 
         if(file)
         	*file = 0;
-        	
+
 	return -1;
+}
+
+long FS_FOpenFileRead(const char *filename, fileHandle_t *file)
+{
+    return FS_FOpenFileReadForThread(filename, file, 0);
+}
+
+long FS_FOpenFileReadThread1(const char *filename, fileHandle_t *file)
+{
+    return FS_FOpenFileReadForThread(filename, file, 1);
+}
+
+long FS_FOpenFileReadThread2(const char *filename, fileHandle_t *file)
+{
+    return FS_FOpenFileReadForThread(filename, file, 2);
 }
 
 
@@ -1505,95 +1553,6 @@ void FS_Dir_f( void ) {
 }
 
 
-/*
-========================================================================================
-
-Handle based file calls for virtual machines
-
-========================================================================================
-*/
-/*
-int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
-	int		r;
-	qboolean	sync;
-
-	sync = qfalse;
-
-	switch( mode ) {
-	case FS_READ:
-		r = FS_FOpenFileRead( qpath, f );
-		break;
-	case FS_READ_LOCK:
-		r = FS_FOpenFileRead( qpath, f );
-		if(fcntl(fileno(fsh[*f].handleFiles.file.o),F_SETLKW,file_lock(F_WRLCK, SEEK_SET)) == -1){
-		    FS_FCloseFile(*f);
-		    r = -1;
-		}else{
-		    fsh[*f].locked = qtrue;
-		}
-		break;
-	case FS_WRITE:
-		*f = FS_FOpenFileWrite( qpath );
-		r = 0;
-		if (*f == 0) {
-			r = -1;
-		}
-		break;
-	case FS_WRITE_LOCK:
-		*f = FS_FOpenFileWrite( qpath );
-		r = 0;
-		if (*f == 0) {
-			r = -1;
-		}else if(fcntl(fileno(fsh[*f].handleFiles.file.o),F_SETLKW,file_lock(F_WRLCK, SEEK_SET)) == -1){
-		    FS_FCloseFile(*f);
-		    r = -1;
-		}else{
-		    fsh[*f].locked = qtrue;
-		}
-		break;
-	case FS_APPEND_SYNC:
-		sync = qtrue;
-	case FS_APPEND:
-		*f = FS_FOpenFileAppend( qpath );
-		r = 0;
-		if (*f == 0) {
-			r = -1;
-		}
-		break;
-	case FS_APPEND_LOCK:
-		*f = FS_FOpenFileAppend( qpath );
-		r = 0;
-		if (*f == 0) {
-			r = -1;
-		}else if(fcntl(fileno(fsh[*f].handleFiles.file.o),F_SETLKW,file_lock(F_WRLCK, SEEK_SET)) == -1){
-		    FS_FCloseFile(*f);
-		    r = -1;
-		}else{
-		    fsh[*f].locked = qtrue;
-		}
-		break;
-	default:
-		Com_Error( ERR_FATAL, "FSH_FOpenFile: bad mode" );
-		return -1;
-	}
-
-	if (!f) {
-		return r;
-	}
-
-	if ( *f ) {
-		fsh[*f].baseOffset = ftell(fsh[*f].handleFiles.file.o);
-		fseek(fsh[*f].handleFiles.file.o,0,SEEK_END);
-		fsh[*f].fileSize = ftell(fsh[*f].handleFiles.file.o);
-		fseek(fsh[*f].handleFiles.file.o,0,SEEK_SET);
-		fsh[*f].streamed = qfalse;
-
-	}
-	fsh[*f].handleSync = sync;
-
-	return r;
-}
-*/
 int	FS_FTell( fileHandle_t f ) {
 	int pos;
 		pos = ftell(fsh[f].handleFiles.file.o);
@@ -1620,6 +1579,16 @@ void FS_FreeFile( void *buffer ) {
 	free( buffer );
 }
 
+/*
+ =============
+ FS_FreeFileKeepBuf
+ =============
+ */
+void FS_FreeFileKeepBuf( )
+{
+	
+	FS_LoadStackDec();
+}
 
 
 /*
@@ -2212,7 +2181,11 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 		switch( origin ) {
 			case FS_SEEK_SET:
 				unzSetOffset(fsh[f].handleFiles.file.z, fsh[f].zipFilePos);
-				unzOpenCurrentFile(fsh[f].handleFiles.file.z);
+				if(unzOpenCurrentFile(fsh[f].handleFiles.file.z) != UNZ_OK)
+				{
+					Com_PrintError("FS_Seek: Failed to open zipfile\n");
+					return -1;
+				}
 				//fallthrough
 
 			case FS_SEEK_CUR:
@@ -2596,6 +2569,11 @@ void FS_SetDirSep(cvar_t* fs_dir)
   Q_strncpyz(buf, fs_dir->string, sizeof(buf));
   length = strlen(buf);
 
+  if( length == 0 )
+  {
+    return;
+  }
+
   for (i = 0; length >= i; i++)
   {
     if ( buf[i] == '\\' )
@@ -2750,7 +2728,7 @@ void FS_Startup(const char* gameName)
 {
 
   char* homePath;
-  cvar_t *level;
+  cvar_t *levelname;
   mvabuf;
 
   Sys_EnterCriticalSection(CRIT_FILESYSTEM);
@@ -2764,6 +2742,8 @@ void FS_Startup(const char* gameName)
   fs_gameDirVar = Cvar_RegisterString("fs_game", "", 28, "Game data directory. Must be \"\" or a sub directory of 'mods/'.");
   fs_ignoreLocalized = Cvar_RegisterBool("fs_ignoreLocalized", qfalse, 160, "Ignore localized files");
 
+  fs_packFiles = 0;
+
   homePath = (char*)Sys_DefaultHomePath();
   if ( !homePath || !homePath[0] )
     homePath = fs_basepath->resetString;
@@ -2771,7 +2751,7 @@ void FS_Startup(const char* gameName)
   fs_restrict = Cvar_RegisterBool("fs_restrict", qfalse, 16, "Restrict file access for demos etc.");
   fs_usedevdir = Cvar_RegisterBool("fs_usedevdir", qfalse, 16, "Use development directories.");
 
-  level = Cvar_FindVar("mapname");
+  levelname = Cvar_FindVar("mapname");
 
   FS_SetDirSep(fs_homepath);
   FS_SetDirSep(fs_basepath);
@@ -2835,14 +2815,14 @@ void FS_Startup(const char* gameName)
       FS_AddGameDirectory(fs_homepath->string, fs_basegame->string);
   }
 	
-  if ( fs_gameDirVar->string[0] && !Q_stricmp(gameName, BASEGAME) && Q_stricmp(fs_gameDirVar->string, gameName) && level && level->string[0])
+  if ( fs_gameDirVar->string[0] && !Q_stricmp(gameName, BASEGAME) && Q_stricmp(fs_gameDirVar->string, gameName) && levelname && levelname->string[0])
   {
 	if ( fs_cdpath->string[0] )
-		FS_AddGameDirectory(fs_cdpath->string, va("usermaps/%s", level->string));
+		FS_AddGameDirectory(fs_cdpath->string, va("usermaps/%s", levelname->string));
 	if ( fs_basepath->string[0] )
-		FS_AddGameDirectory(fs_basepath->string, va("usermaps/%s", level->string));
+		FS_AddGameDirectory(fs_basepath->string, va("usermaps/%s", levelname->string));
 	if ( fs_homepath->string[0] && Q_stricmp(fs_homepath->string, fs_basepath->string) )
-		FS_AddGameDirectory(fs_homepath->string, va("usermaps/%s", level->string));
+		FS_AddGameDirectory(fs_homepath->string, va("usermaps/%s", levelname->string));
   }
 
   if ( fs_gameDirVar->string[0] && !Q_stricmp(gameName, BASEGAME) && Q_stricmp(fs_gameDirVar->string, gameName) )
@@ -2864,8 +2844,12 @@ void FS_Startup(const char* gameName)
   fs_gameDirVar->modified = 0;
   Com_Printf("----------------------\n");
   Com_Printf("%d files in iwd files\n", fs_packFiles);
-	
+
   Sys_LeaveCriticalSection(CRIT_FILESYSTEM);
+
+
+    PHandler_Event(PLUGINS_ONFSSTARTED, fs_searchpaths);
+
 }
 
 void FS_AddIwdFilesForGameDirectory(const char *path, const char *dir);
@@ -3246,7 +3230,7 @@ void FS_PatchFileHandleData()
 	*(qboolean**)0x818BB1C = &fsh[0].handleSync;
 	*(qboolean**)0x818BE0B = &fsh[0].handleSync;
 
-	*(int**)0x818BAF6 = &fsh[0].baseOffset;
+	*(int**)0x818BAF6 = &fsh[0].fileSize;
 
 	*(int**)0x818760F = &fsh[0].zipFilePos;
 	*(int**)0x8187729 = &fsh[0].zipFilePos;
@@ -3301,8 +3285,8 @@ void FS_PatchFileHandleData()
 	*(fileHandleData_t**)0x818BE4B = &fsh[1];
 	*(fileHandleData_t**)0x818BE9B = &fsh[1];
 
-	*(int**)0x8187360 = &fsh[1].baseOffset;
-	*(int**)0x818E766 = &fsh[1].baseOffset;
+	*(int**)0x8187360 = &fsh[1].fileSize;
+	*(int**)0x818E766 = &fsh[1].fileSize;
 
 	*(int**)0x818699A = &fsh[1].zipFilePos;
 	*(int**)0x8187B98 = &fsh[1].zipFilePos;
@@ -3371,6 +3355,12 @@ void FS_PatchFileHandleData()
 	*(int**)0x81865FD = &fs_loadStack;
 	*(int**)0x8187435 = &fs_loadStack;
 	*(int**)0x818BBCE = &fs_loadStack;
+
+	*(int**)0x818819d = &fs_numServerIwds;
+	*(int**)0x81885fc = &fs_numServerIwds;
+
+	*(int**)0x81881b8 = fs_serverIwds;
+	*(int**)0x81881c7 = fs_serverIwds;
 
 }
 
@@ -3631,7 +3621,7 @@ FS_FOpenFileAppend
 
 ===========
 */
-fileHandle_t FS_FOpenFileAppend( const char *filename ) {
+fileHandle_t __cdecl FS_FOpenFileAppend( const char *filename ) {
 	char            ospath[MAX_OSPATH];
 	fileHandle_t f;
 	mvabuf;
@@ -3643,7 +3633,13 @@ fileHandle_t FS_FOpenFileAppend( const char *filename ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization\n" );
 	}
 
-	f = FS_HandleForFile();
+	if(Sys_IsMainThread())
+	{
+		f = FS_HandleForFileForThread(0);
+	}else{
+		f = FS_HandleForFileForThread(3);
+	}
+
 	if(f == 0){
 		Sys_LeaveCriticalSection(CRIT_FILESYSTEM);
 		return 0;
@@ -3679,68 +3675,6 @@ fileHandle_t FS_FOpenFileAppend( const char *filename ) {
 	return f;
 }
 
-/*
-=====================
-FS_PureServerSetLoadedPaks
-
-If the string is empty, all data sources will be allowed.
-If not empty, only pk3 files that match one of the space
-separated checksums will be checked for files, with the
-exception of .cfg and .dat files.
-=====================
-*/
-/*
-
-void FS_PureServerSetLoadedPaks( const char *pakSums, const char *pakNames ) {
-	int i, c, d;
-
-	Cmd_TokenizeString( pakSums );
-
-	c = Cmd_Argc();
-	if ( c > MAX_SEARCH_PATHS ) {
-		c = MAX_SEARCH_PATHS;
-	}
-
-	fs_numServerPaks = c;
-
-	for ( i = 0 ; i < c ; i++ ) {
-		fs_serverPaks[i] = atoi( Cmd_Argv( i ) );
-	}
-
-	if ( fs_numServerPaks ) {
-		Com_DPrintf( "Connected to a pure server.\n" );
-	} else
-	{
-		if ( fs_reordered ) {
-			// show_bug.cgi?id=540
-			// force a restart to make sure the search order will be correct
-			Com_DPrintf( "FS search reorder is required\n" );
-			FS_Restart( fs_checksumFeed );
-			return;
-		}
-	}
-
-	for ( i = 0 ; i < c ; i++ ) {
-		if ( fs_serverPakNames[i] ) {
-			Z_Free( fs_serverPakNames[i] );
-		}
-		fs_serverPakNames[i] = NULL;
-	}
-	if ( pakNames && *pakNames ) {
-		Cmd_TokenizeString( pakNames );
-
-		d = Cmd_Argc();
-		if ( d > MAX_SEARCH_PATHS ) {
-			d = MAX_SEARCH_PATHS;
-		}
-
-		for ( i = 0 ; i < d ; i++ ) {
-			fs_serverPakNames[i] = CopyString( Cmd_Argv( i ) );
-		}
-	}
-}
-
-*/
 
 qboolean FS_SetPermissionsExec(const char* ospath)
 {
@@ -3787,3 +3721,362 @@ __regparm3 void DB_BuildOSPath(const char *filename, int ffdir, int len, char *b
             return;
     }
 }
+
+
+
+/*
+========================================================================================
+
+Handle based file calls for virtual machines
+
+========================================================================================
+*/
+
+int     FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
+	int r;
+	qboolean sync;
+
+	sync = qfalse;
+
+	switch ( mode ) {
+	case FS_READ:
+		r = FS_FOpenFileRead( qpath, f );
+		break;
+	case FS_WRITE:
+/*
+#ifdef __MACOS__    //DAJ MacOS file typing
+		{
+			extern _MSL_IMP_EXP_C long _fcreator, _ftype;
+			_ftype = 'WlfB';
+			_fcreator = 'WlfM';
+		}
+#endif
+*/
+		*f = FS_FOpenFileWrite( qpath );
+		r = 0;
+		if ( *f == 0 ) {
+			r = -1;
+		}
+		break;
+	case FS_APPEND_SYNC:
+		sync = qtrue;
+	case FS_APPEND:
+/*
+#ifdef __MACOS__    //DAJ MacOS file typing
+		{
+			extern _MSL_IMP_EXP_C long _fcreator, _ftype;
+			_ftype = 'WlfB';
+			_fcreator = 'WlfM';
+		}
+#endif
+*/
+		*f = FS_FOpenFileAppend( qpath );
+		r = 0;
+		if ( *f == 0 ) {
+			r = -1;
+		}
+		break;
+	default:
+		Com_Error( ERR_FATAL, "FSH_FOpenFile: bad mode" );
+		return -1;
+	}
+
+	if ( !f ) {
+		return r;
+	}
+
+	if ( *f ) {
+
+		fsh[*f].fileSize = r;
+		fsh[*f].streamed = qfalse;
+
+		// uncommenting this makes fs_reads
+		// use the background threads --
+		// MAY be faster for loading levels depending on the use of file io
+		// q3a not faster
+		// wolf not faster
+
+//		if (mode == FS_READ) {
+//			Sys_BeginStreamedFile( *f, 0x4000 );
+//			fsh[*f].streamed = qtrue;
+//		}
+	}
+	fsh[*f].handleSync = sync;
+
+	return r;
+}
+
+
+
+
+
+typedef struct fsPureSums_s
+{
+
+  struct fsPureSums_s *next;
+  int checksum;
+  char baseName[MAX_OSPATH];
+  char gameName[MAX_OSPATH];
+
+}fsPureSums_t;
+
+static fsPureSums_t *fs_iwdPureChecks;
+
+
+void __cdecl FS_AddIwdPureCheckReference(searchpath_t *search)
+{
+	
+    fsPureSums_t *checks;
+    fsPureSums_t *newCheck;
+
+    if( search->localized )
+    {
+	return;
+    }
+
+    for(checks = fs_iwdPureChecks; checks != NULL ; checks = checks->next)
+    {
+        if ( checks->checksum == search->pack->checksum )
+        {
+          if ( !Q_stricmp(checks->baseName, search->pack->pakBasename) )
+	  {
+			return;
+	  }
+        }
+    }
+    newCheck = (fsPureSums_t *)Z_Malloc(sizeof(fsPureSums_t));
+    newCheck->next = NULL;
+    newCheck->checksum = search->pack->checksum;
+    Q_strncpyz(newCheck->baseName, search->pack->pakBasename, sizeof(newCheck->baseName));
+    Q_strncpyz(newCheck->gameName, search->pack->pakGamename, sizeof(newCheck->gameName));
+
+    if(fs_iwdPureChecks == NULL)
+    {
+        fs_iwdPureChecks = newCheck;
+	return;
+    }
+	
+    for( checks = fs_iwdPureChecks; checks->next != NULL; checks = checks->next );
+	
+    checks->next = newCheck;
+}
+
+
+void __cdecl FS_ShutdownIwdPureCheckReferences()
+{
+  fsPureSums_t *cur;
+  fsPureSums_t *next;
+
+  cur = fs_iwdPureChecks;
+
+  while( cur )
+  {
+    next = cur->next;
+    Z_Free( cur );
+    cur = next;
+  }
+  fs_iwdPureChecks = 0;
+}
+
+
+
+void __cdecl FS_ReferencedIwds(char **outChkSums, char **outPathNames)
+{
+  fsPureSums_t *puresum;
+  searchpath_t *search;
+
+  static char chkSumString[8192];
+  static char pathString[8192];
+  char chksum[1024];
+  
+  chkSumString[0] = 0;
+  pathString[0] = 0;
+  
+  for ( puresum = fs_iwdPureChecks; puresum; puresum = puresum->next )
+  {
+	Com_sprintf(chksum, sizeof(chksum), "%i ", puresum->checksum);
+	Q_strcat(chkSumString, sizeof(chkSumString), chksum);
+	if ( pathString[0] )
+	{
+		Q_strcat(pathString, sizeof(pathString), " ");
+	}
+	Q_strcat(pathString, sizeof(pathString), puresum->gameName);
+    Q_strcat(pathString, sizeof(pathString), "/");
+    Q_strcat(pathString, sizeof(pathString), puresum->baseName);
+  }
+  
+  if ( !fs_gameDirVar->string[0] )
+  {
+		*outChkSums = chkSumString;
+		*outPathNames = pathString;
+		return;
+  }
+  
+  for ( search = fs_searchpaths; search; search = search->next )
+  {
+        if ( search->pack && !search->localized )
+        {
+	    if ( !(search->pack->referenced & FS_GENERAL_REF) &&
+		(!Q_stricmp(search->pack->pakGamename, fs_gameDirVar->string) || !Q_stricmpn(search->pack->pakGamename, "usermaps", 8))
+	    )
+	    {
+		Com_sprintf(chksum, sizeof(chksum), "%i ", search->pack->checksum);
+		Q_strcat(chkSumString, sizeof(chkSumString), chksum);
+		if ( pathString[0] )
+		{
+			Q_strcat(pathString, sizeof(pathString), " ");
+		}
+		Q_strcat(pathString, sizeof(pathString), search->pack->pakGamename);
+		Q_strcat(pathString, sizeof(pathString), "/");
+		Q_strcat(pathString, sizeof(pathString), search->pack->pakBasename);
+	    }
+        }
+  }
+  *outChkSums = chkSumString;
+  *outPathNames = pathString;
+}
+
+void __cdecl FS_ShutdownReferencedFiles(int *numFiles, char **names)
+{
+  int i;
+
+  for(i = 0; i < *numFiles; i++)
+  {
+    if ( names[i] )
+    {
+	Z_Free(names[i]);
+        names[i] = NULL;
+    }
+	*numFiles = 0;
+  }
+}
+
+
+void FS_ShutdownServerIwdNames()
+{
+    FS_ShutdownReferencedFiles(&fs_numServerIwds, fs_serverIwdNames);
+}
+
+
+
+
+
+/*
+=====================
+FS_PureServerSetLoadedPaks
+
+If the string is empty, all data sources will be allowed.
+If not empty, only pk3 files that match one of the space
+separated checksums will be checked for files, with the
+exception of .cfg and .dat files.
+=====================
+*/
+
+int FS_PureServerSetLoadedIwds(const char *paksums, const char *paknames)
+{
+  int i, k, l, rt;
+  int numPakSums;
+  fsPureSums_t *pureSums;
+  int numPakNames;
+  char *lpakNames[1024];
+  int lpakSums[1024];
+
+  rt = 0;
+  
+  Cmd_TokenizeString(paksums);
+  
+  numPakSums = Cmd_Argc();
+  
+  if ( numPakSums > sizeof(lpakSums)/sizeof(lpakSums[0]))
+  {
+    numPakSums = sizeof(lpakSums)/sizeof(lpakSums[0]);
+  }
+  
+  for ( i = 0 ; i < numPakSums ; i++ ) {
+	lpakSums[i] = atoi( Cmd_Argv( i ) );
+  }
+  Cmd_EndTokenizedString();
+
+  Cmd_TokenizeString(paknames);
+  numPakNames = Cmd_Argc();
+  
+  if ( numPakNames > sizeof(lpakNames)/sizeof(lpakNames[0]) )
+  {
+    numPakNames = sizeof(lpakNames)/sizeof(lpakNames[0]);
+  }
+  
+  for ( i = 0 ; i < numPakNames ; i++ ) {
+	lpakNames[i] = CopyString( Cmd_Argv( i ) );
+  }
+  
+  Cmd_EndTokenizedString();
+
+  if ( numPakSums != numPakNames )
+  {
+    Com_Error(ERR_FATAL, "iwd sum/name mismatch");
+	return rt;
+  }
+  
+	if ( numPakSums )
+	{
+  
+		for(pureSums = fs_iwdPureChecks; pureSums; pureSums = pureSums->next)
+		{
+
+			for ( i = 0; i < numPakSums; i++)
+			{
+				if(lpakSums[i] == pureSums->checksum && !Q_stricmp(lpakNames[i], pureSums->baseName))
+				{
+					break;
+				}
+			}
+			if ( i == numPakSums )
+			{
+				rt = 1;
+				break;
+			}
+		}
+	}
+
+	if ( numPakSums == fs_numServerIwds && rt == 0)
+	{
+		for ( i = 0, k = 0; i < fs_numServerIwds; )
+		{
+		  if ( lpakSums[k] == fs_serverIwds[i] && !Q_stricmp(lpakNames[k], fs_serverIwdNames[i]) )
+		  {
+			++k;
+			if ( k < numPakSums )
+			{
+			  i = 0;
+			  continue;
+			}
+			
+			for ( l = 0; l < numPakNames; ++l )
+			{
+				Z_Free(lpakNames[l]);
+				lpakNames[l] = NULL;
+			}
+			return 0;
+		  
+		  }
+		  ++i;
+		}
+		if ( numPakSums == 0 )
+		{
+			return rt;
+		}
+	}
+
+    //SND_StopSounds(8);
+    FS_ShutdownServerIwdNames( );
+    fs_numServerIwds = numPakSums;
+    if ( numPakSums )
+    {
+      Com_DPrintf("Connected to a pure server.\n");
+      Com_Memcpy(fs_serverIwds, lpakSums, sizeof(int) * fs_numServerIwds);
+      Com_Memcpy(fs_serverIwdNames, lpakNames, sizeof(char*) * fs_numServerIwds);
+      //fs_fakeChkSum = 0;
+    }
+    return rt;
+}
+

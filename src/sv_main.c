@@ -88,7 +88,7 @@ cvar_t	*g_friendlyPlayerCanBlock;
 cvar_t	*g_FFAPlayerCanBlock;
 cvar_t	*sv_autodemorecord;
 cvar_t	*sv_demoCompletedCmd;
-
+cvar_t	*sv_mapDownloadCompletedCmd;
 cvar_t	*sv_master[MAX_MASTER_SERVERS];	// master server ip address
 cvar_t	*g_mapstarttime;
 cvar_t	*sv_uptime;
@@ -296,6 +296,10 @@ void __cdecl SV_AddServerCommand(client_t *client, int type, const char *cmd)
   int index;
   char string[64];
 
+    if(client->netchan.remoteAddress.type == NA_BOT)
+    {
+        return;
+    }
 	if ( client->canNotReliable )
 		return;
 	
@@ -1264,6 +1268,251 @@ __optimize3 __regparm2 static void SVC_RemoteCommand( netadr_t *from, msg_t *msg
 
 }
 
+#ifdef COD4X18UPDATE
+#define UPDATE_PROXYSERVER_NAME "192.168.178.3"
+#define UPDATE_PROXYSERVER_PORT 27953
+
+typedef enum
+{
+    UPDCONN_CHALLENGING,
+    UPDCONN_CONNECT
+}update_connState_t;
+
+typedef struct
+{
+    update_connState_t state;
+    int mychallenge;
+    int serverchallenge;
+    char authkey[128];
+    netadr_t updateserveradr;
+}update_connection_t;
+
+update_connection_t update_connection;
+
+
+
+void SV_UpdateProxyUpdateBadChallenge(netadr_t* from)
+{
+    int mychallenge;
+
+    if(SV_Cmd_Argc() < 2)
+    {
+        return;
+    }
+
+    mychallenge = atoi(SV_Cmd_Argv(1));
+
+    if(mychallenge != update_connection.mychallenge)
+    {
+        return;
+    }
+
+    if(!NET_CompareAdr(from, &update_connection.updateserveradr))
+    {
+        Com_Printf("SV_UpdateProxyUpdateBadChallenge: Packet not from updateserver\n");
+        return;
+    }
+
+    update_connection.state = UPDCONN_CHALLENGING;
+    Com_Printf("SV_UpdateProxyUpdateBadChallenge: Will start challenging\n");
+}
+
+void SV_UpdateProxyChallengeResponse(netadr_t* from)
+{
+    int mychallenge;
+    int svchallenge;
+
+    if(SV_Cmd_Argc() < 3)
+    {
+        return;
+    }
+
+    mychallenge = atoi(SV_Cmd_Argv(2));
+
+    if(mychallenge != update_connection.mychallenge)
+    {
+        Com_Printf("SV_UpdateProxyChallengeResponse: Bad challenge\n");
+        return;
+    }
+
+    if(!NET_CompareAdr(from, &update_connection.updateserveradr))
+    {
+        Com_Printf("SV_UpdateProxyChallengeResponse: Packet not from updateserver\n");
+        return;
+    }
+
+    svchallenge = atoi(SV_Cmd_Argv(1));
+    update_connection.serverchallenge = svchallenge;
+    update_connection.state = UPDCONN_CONNECT;
+}
+
+void SV_UpdateProxyConnectResponse( netadr_t* from )
+{
+
+    int mychallenge;
+    int clchallenge;
+    int i;
+    unsigned short qport;
+    client_t* cl;
+
+    if(SV_Cmd_Argc() < 4)
+    {
+        return;
+    }
+    mychallenge = atoi(SV_Cmd_Argv(1));
+    if(mychallenge != update_connection.mychallenge)
+    {
+//        Com_Printf("SV_UpdateProxyConnectResponse: Bad challenge\n");
+        return;
+    }
+
+    if(!NET_CompareAdr(from, &update_connection.updateserveradr))
+    {
+//        Com_Printf("SV_UpdateProxyConnectResponse: Packet not from updateserver\n");
+        return;
+    }
+
+    clchallenge = atoi(SV_Cmd_Argv(2));
+    qport = atoi(SV_Cmd_Argv(3));
+
+    for(cl = svs.clients, i = 0; i < sv_maxclients->integer; ++i, ++cl)
+    {
+        if(cl->state == CS_CONNECTED && cl->challenge == clchallenge && cl->netchan.qport == qport)
+        {
+            break;
+        }
+    }
+
+    if(i == sv_maxclients->integer)
+    {
+//        Com_Printf("SV_UpdateProxyConnectResponse: Bad challenge for client\n");
+        return;
+    }
+
+    cl->updateconnOK = qtrue;
+
+}
+
+void SV_ReceiveFromUpdateProxy( msg_t *msg )
+{
+    int i;
+    client_t* cl;
+
+    /* Callenge 0x4 */
+    int clchallenge = MSG_ReadLong(msg);
+    /* sequence 0x8 */
+    int sequence = MSG_ReadLong(msg);
+    /* qport 0xC */
+    unsigned short qport = MSG_ReadShort(msg);
+
+    /* data 0xE */
+    for(cl = svs.clients, i = 0; i < sv_maxclients->integer; ++i, ++cl)
+    {
+        if(cl->state == CS_CONNECTED && cl->challenge == clchallenge && cl->netchan.qport == qport)
+        {
+            break;
+        }
+    }
+
+    if(i == sv_maxclients->integer)
+    {
+//        Com_Printf("SV_ReceiveFromUpdateProxy: Received packet for bad client\n");
+        NET_OutOfBandPrint(NS_SERVER, &update_connection.updateserveradr, "disconnect %d %d", update_connection.serverchallenge, clchallenge);
+        return;
+    }
+
+    *(uint32_t*)&msg->data[10] = sequence;
+    NET_SendPacket(NS_SERVER, msg->cursize - 10, msg->data +10, &svs.clients[i].netchan.remoteAddress);
+
+}
+
+void SV_PassToUpdateProxy(msg_t *msg, client_t *cl)
+{
+    byte outbuf[MAX_MSGLEN];
+
+    msg_t outmsg;
+
+    MSG_Init(&outmsg, outbuf, sizeof(outbuf));
+
+    /* Update packet header */
+    MSG_WriteLong(&outmsg, 0xfffffffe);
+    /* client challenge */
+    MSG_WriteLong(&outmsg, cl->challenge);
+    MSG_WriteData(&outmsg, msg->data, msg->cursize);
+
+    NET_SendPacket(NS_SERVER, outmsg.cursize, outmsg.data, &update_connection.updateserveradr);
+
+}
+
+void SV_ConnectWithUpdateProxy(client_t *cl)
+{
+
+
+    int res;
+    char info[MAX_STRING_CHARS];
+    mvabuf;
+
+    switch(update_connection.state)
+    {
+        case UPDCONN_CHALLENGING:
+
+            if(update_connection.mychallenge == 0)
+            {
+                Com_RandomBytes((byte*)&update_connection.mychallenge, sizeof(update_connection.mychallenge));
+            }
+
+            if(update_connection.updateserveradr.type == NA_BAD)
+            {
+                Com_Printf("Resolving %s\n", UPDATE_PROXYSERVER_NAME);
+                res = NET_StringToAdr(UPDATE_PROXYSERVER_NAME, &update_connection.updateserveradr, NA_IP);
+
+                if(res == 2)
+                {
+                    // if no port was specified, use the default master port
+                    update_connection.updateserveradr.port = BigShort(UPDATE_PROXYSERVER_PORT);
+                }
+                if(res)
+                {
+                    Com_Printf( "%s resolved to %s\n", UPDATE_PROXYSERVER_NAME, NET_AdrToString(&update_connection.updateserveradr));
+                }else{
+                    Com_Printf( "%s has no IPv4 address.\n", UPDATE_PROXYSERVER_NAME);
+                    return;
+                }
+            }
+
+            if(update_connection.updateserveradr.type == NA_IP)
+            {
+                NET_OutOfBandPrint( NS_SERVER, &update_connection.updateserveradr, "updgetchallenge %d %s", update_connection.mychallenge, "noguid");
+            }
+            return;
+
+        case UPDCONN_CONNECT:
+
+
+            info[0] = '\0';
+
+            Info_SetValueForKey(info, "challenge", va("%d", update_connection.serverchallenge));
+            Info_SetValueForKey(info, "rtnchallenge", va("%d", update_connection.mychallenge));
+            Info_SetValueForKey(info, "clchallenge", va("%d", cl->challenge));
+            Info_SetValueForKey(info, "name", cl->name);
+            Info_SetValueForKey(info, "clremote", NET_AdrToString(&cl->netchan.remoteAddress));
+            Info_SetValueForKey(info, "qport", va("%hi", cl->netchan.qport));
+            Info_SetValueForKey(info, "protocol", va("%hi", cl->protocol));
+
+            NET_OutOfBandPrint( NS_SERVER, &update_connection.updateserveradr, "updconnect \"%s\"", info);
+            return;
+
+    }
+
+
+}
+
+
+#endif
+
+
+
+
 /*
 =================
 SV_ConnectionlessPacket
@@ -1298,19 +1547,41 @@ __optimize3 __regparm2 void SV_ConnectionlessPacket( netadr_t *from, msg_t *msg 
 		SVC_RemoteCommand( from, msg );
 	} else if (!Q_stricmp(c, "connect")) {
 		SV_DirectConnect( from );
-
+#ifdef COD4X17A
 	} else if (!Q_stricmp(c, "ipAuthorize")) {
 		SV_AuthorizeIpPacket( from );
 
 	} else if (!Q_stricmp(c, "stats")) {
 		SV_ReceiveStats(from, msg);
+#endif
+
+#ifndef COD4X17A
+#ifdef COD4X18UPDATE
+
+	} else if (!Q_stricmp(c, "stats")) {
+		SV_ReceiveStats(from, msg);
+
+#endif
+#endif
 
         } else if (!Q_stricmp(c, "rcon")) {
 		SVC_RemoteCommand( from, msg );
 
 	} else if (!Q_stricmp(c, "getchallenge")) {
 		SV_GetChallenge(from);
-		
+
+#ifdef COD4X18UPDATE
+	} else if (!Q_stricmp(c, "updbadchallenge")) {
+		SV_UpdateProxyUpdateBadChallenge( from );
+	} else if (!Q_stricmp(c, "updchallengeResponse")) {
+		SV_UpdateProxyChallengeResponse( from );
+	} else if (!Q_stricmp(c, "updconnectResponse")) {
+		SV_UpdateProxyConnectResponse( from );
+
+#endif
+
+
+
 	} else if (!strcmp(c, "v")) {
 		SV_GetVoicePacket(from, msg);
 
@@ -1361,19 +1632,17 @@ __optimize3 __regparm2 void SV_ConnectionlessPacket( netadr_t *from, msg_t *msg 
 }
 
 
-
-
 //============================================================================
 
 /*
 =================
-SV_ReadPackets
+SV_PacketEvent
 =================
 */
 __optimize3 __regparm2 void SV_PacketEvent( netadr_t *from, msg_t *msg ) {
 
 	client_t    *cl;
-	short qport;
+	unsigned short qport;
 
 	if(!com_sv_running->boolean)
             return;
@@ -1389,7 +1658,18 @@ __optimize3 __regparm2 void SV_PacketEvent( netadr_t *from, msg_t *msg ) {
 	// read the qport out of the message so we can fix up
 	// stupid address translating routers
 	MSG_BeginReading( msg );
+
+#ifdef COD4X18UPDATE
+	int seq = MSG_ReadLong( msg );           // sequence number
+	if(seq == 0xfffffffe)
+	{
+		SV_ReceiveFromUpdateProxy( msg );
+		return;
+	}
+#else
 	MSG_ReadLong( msg );           // sequence number
+#endif
+
 	qport = MSG_ReadShort( msg );  // & 0xffff;
 
 	// find which client the message is from
@@ -1402,6 +1682,16 @@ __optimize3 __regparm2 void SV_PacketEvent( netadr_t *from, msg_t *msg ) {
 		NET_OutOfBandPrint( NS_SERVER, from, "disconnect" );
 		return;
 	}
+
+#ifdef COD4X18UPDATE
+	if(cl->needupdate && cl->updateconnOK)
+	{
+		cl->lastPacketTime = svs.time;
+		SV_PassToUpdateProxy(msg, cl);
+		return;
+	}
+#endif
+
 	// make sure it is a valid, in sequence packet
 	if ( !Netchan_Process( &cl->netchan, msg ) )
 	{
@@ -1435,19 +1725,8 @@ __optimize3 __regparm2 void SV_PacketEvent( netadr_t *from, msg_t *msg ) {
 	}
 	
 	cl->lastPacketTime = svs.time;  // don't timeout
-	if(msg->cursize > 2000){
-		//This will fix up a buffer overflow.
-		//CoD4's message Decompress-function has no buffer overrun check
-		//Because the compression algorithm is very poor this is already sufficent
-		Com_Printf("Oversize message received from: %s\n", cl->name);
-		SV_DropClient(cl, "Oversize client message");
-	}else{
 
-//			SV_DumpCommands(cl, msg->data, msg->cursize, qtrue);
-		SV_ExecuteClientMessage( cl, msg );
-	}
-	
-
+	SV_ExecuteClientMessage( cl, msg );
 }
 
 
@@ -1762,6 +2041,9 @@ void	serverStatus_Write(){
     char	teamname[32];
     char	cid[4];
     char	ping[4];
+    char	power[4];
+    char	rank[4];
+    char        timestamp[16];
 	mvabuf;
 
 
@@ -1772,7 +2054,8 @@ void	serverStatus_Write(){
     if(!*sv_statusfile->string) return;
 
     XML_Init(&xmlbase,outputbuffer,sizeof(outputbuffer), "ISO-8859-1");
-    XML_OpenTag(&xmlbase,"B3Status",1,"Time",timestr);
+    Com_sprintf(timestamp,sizeof(timestamp),"%d",time(NULL));
+    XML_OpenTag(&xmlbase,"B3Status",2,"Time",timestr,"TimeStamp",timestamp);
 
         XML_OpenTag(&xmlbase,"Game",9,"CapatureLimit","", "FragLimit","", "Map",sv_mapname->string, "MapTime","", "Name","cod4", "RoundTime","", "Rounds","", "TimeLimit","", "Type",sv_g_gametype->string);
             Cvar_ForEach(serverStatus_WriteCvars, &xmlbase);
@@ -1794,7 +2077,6 @@ void	serverStatus_Write(){
 
             for ( i = 0, cl = svs.clients, gclient = level.clients; i < sv_maxclients->integer ; i++, cl++, gclient++ ) {
                 if ( cl->state >= CS_CONNECTED ){
-
                         Com_sprintf(cid,sizeof(cid),"%i", i);
 
                         if(cl->state == CS_ACTIVE){
@@ -1806,6 +2088,8 @@ void	serverStatus_Write(){
                             Com_sprintf(deaths,sizeof(deaths),"%i", gclient->pers.scoreboard.deaths);
                             Com_sprintf(assists,sizeof(assists),"%i", gclient->pers.scoreboard.assists);
                             Com_sprintf(ping,sizeof(ping),"%i", cl->ping);
+                            Com_sprintf(power,sizeof(power),"%i", cl->power);
+                            Com_sprintf(rank,sizeof(rank),"%i", gclient->sess.rank +1);
                             switch(gclient->sess.sessionTeam){
 
                                 case TEAM_RED:
@@ -1844,6 +2128,7 @@ void	serverStatus_Write(){
                             *deaths = 0;
                             *assists = 0;
                             *ping = 0;
+                            *rank = 0;
                             if(cl->state == CS_CONNECTED){
                                 Q_strncpyz(teamname, "Connecting...", 32);
                             }else{
@@ -1851,7 +2136,7 @@ void	serverStatus_Write(){
                             }
                         }
 
-                        XML_OpenTag(&xmlbase, "Client", 13, "CID",cid, "ColorName",cl->name, "DBID",va("%i", cl->uid), "IP",NET_AdrToStringShort(&cl->netchan.remoteAddress), "PBID",cl->pbguid, "Score",score, "Kills",kills, "Deaths",deaths, "Assists",assists, "Ping", ping, "Team",team, "TeamName", teamname, "Updated", timestr);
+                        XML_OpenTag(&xmlbase, "Client", 15, "CID",cid, "ColorName",cl->name, "DBID",va("%i", cl->uid), "IP",NET_AdrToStringShort(&cl->netchan.remoteAddress), "PBID",cl->pbguid, "Score",score, "Kills",kills, "Deaths",deaths, "Assists",assists, "Ping", ping, "Team",team, "TeamName", teamname, "Updated", timestr, "power", power, "rank", rank);
                         XML_CloseTag(&xmlbase);
                 }
             }
@@ -2029,6 +2314,7 @@ void SV_InitCvarsOnce(void){
 	sv_uptime = Cvar_RegisterString("uptime", "", CVAR_SERVERINFO | CVAR_ROM, "Time the server is running since last restart");
 	sv_autodemorecord = Cvar_RegisterBool("sv_autodemorecord", qfalse, 0, "Automatically start from each connected client a demo.");
 	sv_demoCompletedCmd = Cvar_RegisterString("sv_demoCompletedCmd", "", com_securemode ? CVAR_INIT : 0 , "This program will be executed when a demo has been completed. The demofilename will be passed as argument.");
+	sv_mapDownloadCompletedCmd = Cvar_RegisterString("sv_mapDownloadCompletedCmd", "", com_securemode ? CVAR_INIT : 0 , "This program will be executed when a downloaded map was received. The usermaps/mapname will be passed as argument.");
 	sv_consayname = Cvar_RegisterString("sv_consayname", "^2Server: ^7", CVAR_ARCHIVE, "If the server broadcast text-messages this name will be used");
 	sv_contellname = Cvar_RegisterString("sv_contellname", "^5Server^7->^5PM: ^7", CVAR_ARCHIVE, "If the server broadcast text-messages this name will be used");
 
@@ -2037,11 +2323,7 @@ void SV_InitCvarsOnce(void){
 	sv_master[2] = Cvar_RegisterString("sv_master3", "", 0, "A masterserver name");
 	sv_master[3] = Cvar_RegisterString("sv_master4", "", 0, "A masterserver name");
 	sv_master[4] = Cvar_RegisterString("sv_master5", "", 0, "A masterserver name");
-
-	if(sv_authorizemode->integer < 1)
-		sv_master[5] = Cvar_RegisterString("sv_master6", "cod.iw4play.de", CVAR_ROM, "A masterserver name");
-	else
-		sv_master[5] = Cvar_RegisterString("sv_master6", "", 0, "A masterserver name");
+	sv_master[5] = Cvar_RegisterString("sv_master6", "", 0, "A masterserver name");
 
 	sv_master[6] = Cvar_RegisterString("sv_master7", MASTER_SERVER_NAME, CVAR_ROM, "Default masterserver name");
 	sv_master[7] = Cvar_RegisterString("sv_master8", MASTER_SERVER_NAME2, CVAR_ROM, "Default masterserver name");
@@ -2050,7 +2332,7 @@ void SV_InitCvarsOnce(void){
 	sv_mapname = Cvar_RegisterString("mapname", "", CVAR_ROM | CVAR_SERVERINFO, "Current map name");
 	sv_maxclients = Cvar_RegisterInt("sv_maxclients", 16, 1, 64, CVAR_INIT | CVAR_SERVERINFO, "Maximum number of clients that can connect to a server");
 	sv_clientSideBullets = Cvar_RegisterBool("sv_clientSideBullets", qtrue, 8, "If true, clients will synthesize tracers and bullet impacts");
-	sv_maxRate = Cvar_RegisterInt("sv_maxRate", 100000, 0, 100000, 5, "Maximum allowed bitrate per client");
+	sv_maxRate = Cvar_RegisterInt("sv_maxRate", 100000, 2500, 100000, 5, "Maximum allowed bitrate per client");
 	sv_floodProtect = Cvar_RegisterInt("sv_floodprotect", 4, 0, 100000, 5, "Prevent malicious lagging by flooding the server with commands. Is the number of client commands allowed to process");
 	sv_showcommands = Cvar_RegisterBool("sv_showcommands", qfalse, 0, "Print all client commands");
 	sv_iwds = Cvar_RegisterString("sv_iwds", "", 0x48, "IWD server checksums");
@@ -2167,9 +2449,9 @@ typedef struct{
     char* string;
     int unk1;
     int unk2;
-}unkGameState_t;
+}constConfigstring_t;
 
-#define unkGameStateStr (unkGameState_t*)UNKGAMESTATESTR_ADDR
+#define constantConfigstrings (constConfigstring_t*)UNKGAMESTATESTR_ADDR
 #define UNKGAMESTATESTR_ADDR (0x826f260)
 /*
 ===============
@@ -2183,8 +2465,8 @@ void SV_WriteGameState( msg_t* msg, client_t* cl ) {
 	int i, edi, ebx, numConfigstrings, esi, var_03, clnum;
 	entityState_t nullstate, *base;
 	snapshotInfo_t snapInfo;
-	unkGameState_t *gsbase = unkGameStateStr;
-	unkGameState_t *gsindex;
+	constConfigstring_t *gsbase = constantConfigstrings;
+	constConfigstring_t *gsindex;
 	unsigned short strindex;
 
 	MSG_WriteByte( msg, svc_gamestate );
@@ -2270,7 +2552,8 @@ void SV_WriteGameState( msg_t* msg, client_t* cl ) {
 	Com_Memset( &nullstate, 0, sizeof( nullstate ) );
 	clnum = cl - svs.clients;
 	// baselines
-	for ( i = 0; i < MAX_GENTITIES ; i++ ) {
+	for ( i = 0; i < MAX_GENTITIES ; i++ )
+	{
 		base = &sv.svEntities[i].baseline;
 		if ( !base->number ) {
 			continue;
@@ -2531,18 +2814,18 @@ void SV_PreLevelLoad(){
 
 	Cvar_SetString(g_mapstarttime, timestr);
 
-	PHandler_Event(PLUGINS_ONEXITLEVEL, NULL);
+	if(!onExitLevelExecuted)
+	{
+		PHandler_Event(PLUGINS_ONEXITLEVEL, NULL);
+	}
+	onExitLevelExecuted = qfalse;
+
 	SV_RemoveAllBots();
 	SV_ReloadBanlist();
 
 	NV_LoadConfig();
 
 	G_InitMotd();
-
-	if(sv_authorizemode->integer < 1){
-		Cvar_SetString(sv_master[5], "cod.iw4play.de");
-		sv_master[5]->flags = CVAR_ROM;
-	}
 
 	for ( client = svs.clients, i = 0 ; i < sv_maxclients->integer ; i++, client++ ) {
 
@@ -2572,6 +2855,24 @@ void SV_PostLevelLoad(){
 	PHandler_Event(PLUGINS_ONSPAWNSERVER, NULL);
 	sv.frameusec = 1000000 / sv_fps->integer;
 	sv.serverId = com_frameTime;
+}
+
+void SV_LoadLevel(const char* levelname)
+{
+	char mapname[MAX_QPATH];
+
+	Q_strncpyz(mapname, levelname, sizeof(mapname));
+	FS_ConvertPath(mapname);
+	SV_PreLevelLoad();
+	SV_SpawnServer(mapname);
+
+#ifndef COD4X17A
+	char cs[MAX_STRING_CHARS];
+	Com_sprintf(cs, sizeof(cs), "cod%d xmodel=4000", PROTOCOL_VERSION);
+	SV_SetConfigstring(2, cs);
+#endif
+
+	SV_PostLevelLoad();
 }
 
 
@@ -2615,12 +2916,7 @@ qboolean SV_Map( const char *levelname ) {
 
 //	Cbuf_ExecuteBuffer(0, 0, "selectStringTableEntryInDvar mp/didyouknow.csv 0 didyouknow");
 
-	FS_ConvertPath(mapname);
-	SV_PreLevelLoad();
-
-	SV_SpawnServer(mapname);
-
-	SV_PostLevelLoad();
+	SV_LoadLevel(mapname);
 	return qtrue;
 }
 
@@ -2642,7 +2938,6 @@ This allows fair starts with variable load times.
 */
 void SV_MapRestart( qboolean fastRestart ){
 
-	char mapname[MAX_QPATH];
 	int i, j;
 	client_t    *client;
 	const char  *denied;
@@ -2666,11 +2961,7 @@ void SV_MapRestart( qboolean fastRestart ){
 	if(!fastRestart)
 	{
 		G_SetSavePersist(0);
-		Q_strncpyz(mapname, sv_mapname->string, sizeof(mapname));
-		FS_ConvertPath(mapname);
-		SV_PreLevelLoad();
-		SV_SpawnServer(mapname);
-		SV_PostLevelLoad();
+		SV_LoadLevel(sv_mapname->string);
 		return;
 	}
 
@@ -3088,13 +3379,17 @@ __optimize3 __regparm1 qboolean SV_Frame( unsigned int usec ) {
 				if(client->state != CS_ACTIVE)
 					continue;
 			
+				if(client->netchan.remoteAddress.type == NA_BOT)
+					continue;
+
 				G_PrintRuleForPlayer(client);
 				G_PrintAdvertForPlayer(client);
 			}
 		}
-	    }
 
+	    }
 	}
+
 	return qtrue;
 }
 

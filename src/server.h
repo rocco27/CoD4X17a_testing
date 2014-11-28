@@ -35,6 +35,7 @@
 #include "g_hud.h"
 #include "sys_cod4defs.h"
 #include "cvar.h"
+#include "net_game_conf.h"
 
 #include <time.h>
 
@@ -60,18 +61,6 @@
 // to make it a bit harder to DOS one single IP address from connecting
 // while not allowing a single ip to grab all challenge resources
 #define MAX_CHALLENGES_MULTI (MAX_CHALLENGES / 2)
-
-#define	AUTHORIZE_TIMEOUT	10000
-#define	AUTHORIZE_TIMEOUT2	5000
-
-#ifndef AUTHORIZE_SERVER_NAME
-#define	AUTHORIZE_SERVER_NAME	"cod4master.activision.com"
-#endif
-
-#ifndef PORT_AUTHORIZE
-#define	PORT_AUTHORIZE		20800
-#endif
-#define	PORT_SERVER		28960
 
 #define CLIENT_BASE_ADDR 0x90b4f8C
 
@@ -164,7 +153,11 @@ typedef struct client_s {//90b4f8c
 	//Free Space
 	qboolean		enteredWorldForFirstTime;
 	unsigned int		connectedTime;
-	byte			free[648];
+	char			xversion[8];
+	int			protocol;
+	qboolean		needupdate;
+	qboolean		updateconnOK;
+	byte			free[628];
 	char			name[64];
 
 	int			unknownUsercmd1;	//0x63c
@@ -226,7 +219,7 @@ typedef struct client_s {//90b4f8c
 	short			clscriptid; //0xa0d22
 	int			canNotReliable; 
 	int			serverId; //0xa0d28
-	voices_t	voicedata[40];
+	voices_t		voicedata[40];
 	int			unsentVoiceData;//(0xa35f4)
 	byte			mutedClients[MAX_CLIENTS];
 	byte			hasVoip;//(0xa3638)
@@ -428,7 +421,9 @@ typedef struct {//0x8c51780
 
 typedef struct {
 	unsigned long long	nextHeartbeatTime;
+#ifdef COD4X17A
 	challenge_t		challenges[MAX_CHALLENGES];	// to prevent invalid IPs from connecting
+#endif
 	netadr_t		redirectAddress;			// for rcon return messages
 	netadr_t		authorizeAddress;			// ??? for rcon return messages
 	client_t		*redirectClient;		//used for SV_ExecuteRemoteControlCmd()
@@ -590,7 +585,7 @@ void SV_ExecuteClientCommand( client_t *cl, const char *s, qboolean clientOK, qb
 void SV_SendClientSnapshot( client_t *cl );
 
 qboolean SV_Acceptclient(int);
-client_t* SV_ReadPackets(netadr_t *from, int qport);
+client_t* SV_ReadPackets(netadr_t *from, unsigned int qport);
 void SV_GetVoicePacket(netadr_t *from, msg_t* msg);
 void SV_UserVoice(client_t* cl, msg_t* msg);
 void SV_PreGameUserVoice(client_t* cl, msg_t* msg);
@@ -691,6 +686,7 @@ const char* SV_GetGuid(unsigned int clnum);
 qboolean SV_ExecuteRemoteCmd(int, const char*);
 qboolean SV_UseUids();
 int SV_GetUid(unsigned int);
+void SV_SetUid(unsigned int clnum, unsigned int uid);
 sharedEntity_t* SV_AddBotClient();
 sharedEntity_t* SV_RemoveBot();
 qboolean SV_AddBan(int, int, char*, char*, time_t, char*);
@@ -705,9 +701,7 @@ qboolean SV_RemoteCmdAddAdmin(int uid, char* guid, int power);
 qboolean SV_RemoteCmdInfoAddAdmin(const char* infostring);
 void SV_RemoteCmdWriteAdminConfig(char* buffer, int size);
 void QDECL SV_PrintAdministrativeLog( const char *fmt, ... );
-int SV_RemoteCmdGetInvokerUid( void );
-int SV_RemoteCmdGetInvokerClnum( void );
-int SV_RemoteCmdGetInvokerPower( void );
+
 void SV_RemoteCmdSetAdmin(int uid, char* guid, int power);
 void SV_RemoteCmdUnsetAdmin(int uid, char* guid);
 void SV_RemoteCmdSetPermission(char* command, int power);
@@ -719,6 +713,7 @@ void SV_GetConfigstring( int index, char *buffer, int bufferSize );
 extern cvar_t* sv_protocol;
 extern cvar_t* sv_padPackets;
 extern cvar_t* sv_demoCompletedCmd;
+extern cvar_t* sv_mapDownloadCompletedCmd;
 extern cvar_t* sv_wwwBaseURL;
 extern cvar_t* sv_maxPing;
 extern cvar_t* sv_minPing;
@@ -746,6 +741,7 @@ extern cvar_t* sv_maxRate;
 extern cvar_t* sv_mapname;
 extern cvar_t* sv_floodProtect;
 extern cvar_t* sv_showAverageBPS;
+extern cvar_t* sv_hostname;
 
 void __cdecl SV_StringUsage_f(void);
 void __cdecl SV_ScriptUsage_f(void);
@@ -769,6 +765,10 @@ void __cdecl SV_FreeClientScriptId(client_t *cl);
 void __cdecl SV_LinkEntity(gentity_t*);
 void __cdecl SV_UnlinkEntity(gentity_t*);
 
+int SV_GetPlayerUIDByHandle(const char* handle);
+client_t* SV_GetPlayerClByHandle(const char* handle);
+const char* SV_GetPlayerNameByHandle(const char* handle);
+
 //sv_banlist.c
 void SV_InitBanlist( void );
 qboolean  SV_ReloadBanlist();
@@ -791,6 +791,12 @@ __cdecl void SV_WriteSnapshotToClient(client_t* client, msg_t* msg);
 __cdecl void SV_ClipMoveToEntity(struct moveclip_s *clip, svEntity_t *entity, struct trace_s *trace);
 void SV_Cmd_Init();
 void SV_CopyCvars();
+
+#ifdef COD4X18UPDATE
+void SV_ConnectWithUpdateProxy(client_t *cl);
 #endif
+
+#endif
+
 
 

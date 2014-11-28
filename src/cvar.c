@@ -1599,7 +1599,7 @@ weren't declared in C code.
 */
 void Cvar_Set_f( void ) {
 	int		i, c, l, len;
-	char	combined[MAX_STRING_TOKENS];
+	char	combined[8192];
 
 	c = Cmd_Argc();
 	if ( c < 3 ) {
@@ -1611,7 +1611,7 @@ void Cvar_Set_f( void ) {
 	l = 0;
 	for ( i = 2 ; i < c ; i++ ) {
 		len = strlen ( Cmd_Argv( i ) + 1 );
-		if ( l + len >= MAX_STRING_TOKENS - 2 ) {
+		if ( l + len >= sizeof(combined) - 2 ) {
 			break;
 		}
 		strcat( combined, Cmd_Argv( i ) );
@@ -1635,7 +1635,7 @@ weren't declared in C code.
 void Cvar_SetFromCvar_f( void ) {
 	int c;
 	cvar_t* v;
-	char value[1024];
+	char value[8192];
 
 	c = Cmd_Argc();
 	if ( c < 3 ) {
@@ -1772,9 +1772,9 @@ with the archive flag set to qtrue.
 void Cvar_WriteVariables(fileHandle_t f)
 {
 	cvar_t	*var;
-	char	bufferval[1024];
-	char	bufferlatch[1024];
-	char	buffer[1024];
+	char	bufferval[8192];
+	char	bufferlatch[8192];
+	char	buffer[8192];
 
 	for (var = cvar_vars; var; var = var->next)
 	{
@@ -2018,7 +2018,7 @@ Cvar_DisplayableValue
 =====================
 */
 char	*Cvar_DisplayableValue( cvar_t const *var) {
-	static char value[1024];
+	static char value[8192];
 
 	if(!var)
 		value[0] = '\0';
@@ -2248,7 +2248,7 @@ void Cvar_Init (void)
 {
 	Cmd_AddCommand ("toggle", Cvar_Toggle_f);
 	Cmd_SetCommandCompletionFunc( "toggle", Cvar_CompleteCvarName );
-	Cmd_AddCommand ("set", Cvar_Set_f);
+	Cmd_AddPCommand ("set", Cvar_Set_f, 98);
 	Cmd_SetCommandCompletionFunc( "set", Cvar_CompleteCvarName );
 	Cmd_AddCommand ("sets", Cvar_SetS_f);
 	Cmd_SetCommandCompletionFunc( "sets", Cvar_CompleteCvarName );
@@ -2262,7 +2262,7 @@ void Cvar_Init (void)
 	Cmd_SetCommandCompletionFunc( "reset", Cvar_CompleteCvarName );
 	Cmd_AddCommand ("setu", Cvar_SetU_f);
 	Cmd_SetCommandCompletionFunc( "setu", Cvar_CompleteCvarName );
-	Cmd_AddCommand ("cvarlist", Cvar_List_f);
+	Cmd_AddPCommand ("cvarlist", Cvar_List_f, 98);
 	cvar_cheats = Cvar_RegisterBool("cvar_cheats", qfalse, CVAR_INIT, "Enable cheating");
 	cheating_enabled = cvar_cheats->boolean;
 }

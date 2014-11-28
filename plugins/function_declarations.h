@@ -45,7 +45,7 @@
     __cdecl char* Plugin_ParseGetToken(char* line);                 // Tokenize a string - get next token
     __cdecl int Plugin_ParseTokenLength(char* token);               // Tokenize a string - get the token's length
     __cdecl void Plugin_ParseReset(void);               			// Tokenize a string - Reset the parsers position
-    
+    __cdecl void Plugin_Cbuf_AddText(const char* text);
     
     //      == Cvars ==
     
@@ -69,6 +69,8 @@
     __cdecl int Plugin_Cvar_VariableIntegerValue( const char *var_name );
     __cdecl int Plugin_Cvar_VariableBooleanValue( const char *var_name );
     __cdecl const char* Plugin_Cvar_VariableString( const char *var_name );
+    // Sets a cvar by name and by a string value which gets interpreted correctly depending on the cvar type
+    __cdecl void Plugin_Cvar_Set( const char *var_name, const char* value );
 
 
     //      == File handling functions == - Do we really need those?
@@ -79,6 +81,9 @@
     __cdecl int Plugin_FS_ReadLine(void *buffer, int len, fileHandle_t f);          // Read a line from file
     __cdecl int Plugin_FS_Write(const void *buffer, int len, fileHandle_t h);       // Write to file
     __cdecl qboolean Plugin_FS_FCloseFile(fileHandle_t f);                          // Cloase an open file
+
+    //Writes the provided buffer into the file named by qpath. This is the most easiest way to write a file
+    __cdecl int Plugin_FS_SV_WriteFile( const char *qpath, const void *buffer, int size);
 
 
     //      == Networking ==
@@ -106,7 +111,7 @@
     __cdecl void Plugin_AddCommand(char *name, xcommand_t command, int defaultpower); // Add a server command
     __cdecl void *Plugin_Malloc(size_t size);                                // Same as stdlib.h function malloc
     __cdecl void Plugin_Free(void *ptr);                                     // Same as stdlib.h function free
-    __cdecl void Plugin_Error(int code, const char *fmt, ...);                       // Notify the server of an error, action depends on code parameter
+    __cdecl void Plugin_Error(int code, const char *fmt, ...);               // Notify the server of an error, action depends on code parameter
     __cdecl int Plugin_GetLevelTime();                                       // Self explanatory
     __cdecl int Plugin_GetServerTime();                                      // Self explanatory
 
@@ -145,8 +150,8 @@
     __cdecl void Plugin_RandomBytes( byte *string, int len );
 
     //      == Scriptfunctions ==
-    __cdecl void Plugin_ScrAddFunction(char *name, xfunction_t function);
-    __cdecl void Plugin_ScrAddMethod(char *name, xfunction_t function);
+    __cdecl void Plugin_ScrAddFunction(char *name, void (*function)());
+    __cdecl void Plugin_ScrAddMethod(char *name, void (*function)(scr_entref_t object));
     __cdecl void Plugin_ScrReplaceFunction(char *name, xfunction_t function);
     __cdecl void Plugin_ScrReplaceMethod(char *name, xfunction_t function);
 
@@ -170,10 +175,25 @@
     __cdecl void Plugin_Scr_AddVector( vec3_t vec );
     __cdecl void Plugin_Scr_AddArray( void );
     __cdecl void Plugin_Scr_MakeArray( void );
-    __cdecl void Plugin_Scr_Notify( gentity_t*, unsigned short, unsigned int);
-    __cdecl void Plugin_Scr_NotifyNum( int, unsigned int, unsigned int, unsigned int);
     __cdecl short Plugin_Scr_ExecEntThread( gentity_t* ent, int callbackHook, unsigned int numArgs);
     __cdecl short Plugin_Scr_ExecThread( int callbackHook, unsigned int numArgs);
-    __cdecl void  Plugin_Scr_FreeThread( short threadId);
+    __cdecl void Plugin_Scr_FreeThread( short threadId);
+
+
+
+    __cdecl void Plugin_Scr_NotifyLevel(int constString, unsigned int numArgs);
+    __cdecl void Plugin_Scr_NotifyNum(int entityNum, unsigned int entType, unsigned int constString, unsigned int numArgs);
+    __cdecl void Plugin_Scr_Notify(gentity_t* ent, unsigned short constString, unsigned int numArgs);
+    __cdecl int Plugin_Scr_AllocString(const char*);
+
+
 
     __cdecl playerState_t *Plugin_SV_GameClientNum( int num ); //Retrives the playerState_t* object from a client number
+
+    __cdecl gentity_t* Plugin_GetGentityForEntityNum(int entnum);
+    __cdecl client_t* Plugin_GetClientForClientNum(int clientnum);
+
+    __cdecl const char* Plugin_SL_ConvertToString(int index);
+
+    __cdecl void Plugin_SV_SetConfigstring(int index, const char *text);
+    __cdecl void Plugin_SV_GetConfigstring( int index, char *buffer, int bufferSize );

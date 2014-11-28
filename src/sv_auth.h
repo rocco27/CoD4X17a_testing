@@ -36,7 +36,8 @@ typedef struct{
 	char username[32];
 	char salt[129];
 	char sha256[65];
-	//int power; Stored inside the adminPower_t object
+	char sessionid[65];
+	int power;
 	int uid;
 }authData_admin_t; // size: 32 + 129 + 65 = 289 B
 
@@ -46,16 +47,25 @@ typedef struct{
 }authData_t; // size: MAX_AUTH_ADMINS * 289 = 512 * 289 = 147.968 ~= 148kB
 
 
-void Auth_SetAdmin_f( void );
-void Auth_UnsetAdmin_f( void );
-void Auth_ListAdmins_f( void );
-void Auth_ChangeAdminPassword( int uid,const char* oldPassword, const char *password );
+void Auth_ChangeAdminPassword( int uid, const char *password );
+int Auth_Authorize(const char *login, const char *password);
+void Auth_WipeSessionId(const char *username);
+
 
 qboolean Auth_AddAdminToList(const char* username, const char* password, const char* salt, int power, int uid);
 void Auth_ClearAdminList( void );
 
 void Auth_Init();
+int Auth_GetUID(const char* username);
+const char* Auth_GetNameByUID( int uid );
+int Auth_GetClPowerByUID(int uid);
+authData_admin_t* Auth_GetAdminFromIndex( int index );
+
+
 qboolean Auth_InfoAddAdmin(const char* line);
 void Auth_WriteAdminConfig(char* buffer, int size);
+
+const char* Auth_FindSessionID(const char* sessionid);
+const char* Auth_GetSessionId(const char* username, const char *password);
 
 #endif

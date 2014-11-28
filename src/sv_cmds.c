@@ -42,6 +42,7 @@ These commands can only be entered from stdin or by a remote operator datagram
 #include "httpftp.h"
 #include "qcommon_mem.h"
 #include "sys_thread.h"
+#include "sys_main.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -109,55 +110,42 @@ static void SV_ConSay(client_t *cl, consaytype_t contype) {
 }
 
 
-/*
-==================
-SV_GetPlayerByHandle
 
-Returns the player with player id or name from Cmd_Argv(1)
-==================
-*/
 typedef struct{
 	int uid;
 	client_t *cl;
 }clanduid_t;
 
-static clanduid_t SV_GetPlayerByHandle( void ) {
-	clanduid_t	cl;
+
+
+static void SV_GetPlayerByHandleInternal( const char* s, clanduid_t* cl) {
 	client_t	*lastfound;
 	int		i, playermatches;
-	char		*s;
 	char		cleanName[64];
 
-	cl.uid = 0;
-	cl.cl = NULL;
+	cl->uid = 0;
+	cl->cl = NULL;
 
 	// make sure server is running
 	if ( !com_sv_running->boolean ) {
-		return cl;
+		return;
 	}
-
-	if ( Cmd_Argc() < 2 ) {
-		Com_Printf( "No player specified.\n" );
-		return cl;
-	}
-
-	s = Cmd_Argv(1);
 
 
         if((s[0] == '@' || s[0] == 'u') && isNumeric(&s[1], 0)){
 
-		cl.uid = atoi(&s[1]);
-		if(cl.uid < 1){
-			cl.uid = 0;
+		cl->uid = atoi(&s[1]);
+		if(cl->uid < 1){
+			cl->uid = 0;
 			Com_Printf("Invalid UID specified.\n");
-			return cl;
+			return;
 		}
 
         }else{
 
-        //    cl = SV_GetPlayerByHandle();
+        //    cl = SV_Cmd_GetPlayerByHandle();
 
-		cl.cl = NULL;
+		cl->cl = NULL;
 
 		// Check whether this is a numeric player handle
 		for(i = 0; s[i] >= '0' && s[i] <= '9'; i++);
@@ -169,58 +157,58 @@ static clanduid_t SV_GetPlayerByHandle( void ) {
 			// Check for numeric playerid match
 			if(plid >= 0 && plid < sv_maxclients->integer)
 			{
-				cl.cl = &svs.clients[plid];
+				cl->cl = &svs.clients[plid];
 
-				if(!cl.cl->state)
-					cl.cl = NULL;
+				if(!cl->cl->state)
+					cl->cl = NULL;
 			}
 		}
-		if(!cl.cl){
+		if(!cl->cl){
 
 			if(strlen(s) < 3){ //Don't process too short names
 				Com_Printf( "Player %s is not on the server\n", s );
-				cl.cl = NULL;
-				return cl;
+				cl->cl = NULL;
+				return;
 			}
 
 			playermatches = 0; //This must be one
 			lastfound = NULL;
 
 			// check for a exact name match
-			for ( i=0, cl.cl=svs.clients ; i < sv_maxclients->integer ; i++, cl.cl++ ) {
-				if ( !cl.cl->state ) {
+			for ( i=0, cl->cl=svs.clients ; i < sv_maxclients->integer ; i++, cl->cl++ ) {
+				if ( !cl->cl->state ) {
 					continue;
 				}
-				if ( !Q_stricmp( cl.cl->name, s ) ) {
-					lastfound = cl.cl;
+				if ( !Q_stricmp( cl->cl->name, s ) ) {
+					lastfound = cl->cl;
 					playermatches++;
 					continue;
 				}
 
-				Q_strncpyz( cleanName, cl.cl->name, sizeof(cleanName) );
+				Q_strncpyz( cleanName, cl->cl->name, sizeof(cleanName) );
 				Q_CleanStr( cleanName );
 				if ( !Q_stricmp( cleanName, s ) ) {
-					lastfound = cl.cl;
+					lastfound = cl->cl;
 					playermatches++;
 					continue;
 				}
 			}
 
 			if(!lastfound){ //No exact playermatch found - Now search for partial name matches
-				for ( i=0, cl.cl=svs.clients ; i < sv_maxclients->integer ; i++, cl.cl++ ) {
-					if ( !cl.cl->state ) {
+				for ( i=0, cl->cl=svs.clients ; i < sv_maxclients->integer ; i++, cl->cl++ ) {
+					if ( !cl->cl->state ) {
 						continue;
 					}
-					if ( Q_stristr( cl.cl->name, s ) ) {
-						lastfound = cl.cl;
+					if ( Q_stristr( cl->cl->name, s ) ) {
+						lastfound = cl->cl;
 						playermatches++;
 						continue;
 					}
 
-					Q_strncpyz( cleanName, cl.cl->name, sizeof(cleanName) );
+					Q_strncpyz( cleanName, cl->cl->name, sizeof(cleanName) );
 					Q_CleanStr( cleanName );
 					if ( Q_stristr( cleanName, s ) ) {
-						lastfound = cl.cl;
+						lastfound = cl->cl;
 						playermatches++;
 						continue;
 					}
@@ -229,30 +217,100 @@ static clanduid_t SV_GetPlayerByHandle( void ) {
 
 			if(!lastfound){ //Still nothing found!
 				Com_Printf( "Player %s is not on the server\n", s );
-				cl.cl = NULL;
-				return cl;
+				cl->cl = NULL;
+				return;
 			}else if(playermatches != 1){
 				Com_Printf( "Dup player matches!\n", s );
-				cl.cl = NULL;
-				return cl;
+				cl->cl = NULL;
+				return;
 			}else{
-				cl.cl = lastfound;
+				cl->cl = lastfound;
 			}
 		}
-                cl.uid = cl.cl->uid;
+                cl->uid = cl->cl->uid;
         }
 
-        if(!cl.cl && cl.uid > 0){ //See whether this player is currently onto server
-            for(i = 0, cl.cl=svs.clients; i < sv_maxclients->integer; i++, cl.cl++){
-                if(cl.cl->state && cl.uid == cl.cl->uid){
+        if(!cl->cl && cl->uid > 0){ //See whether this player is currently onto server
+            for(i = 0, cl->cl=svs.clients; i < sv_maxclients->integer; i++, cl->cl++){
+                if(cl->cl->state && cl->uid == cl->cl->uid){
                     break;
                 }
             }
             if(i == sv_maxclients->integer)
-                cl.cl = NULL;
+                cl->cl = NULL;
         }
+	
+}
 
+
+/*
+ ==================
+ SV_Cmd_GetPlayerByHandle
+ 
+ Returns the player with player id or name from Cmd_Argv(1)
+ ==================
+ */
+
+
+static clanduid_t SV_Cmd_GetPlayerByHandle( void ) {
+	clanduid_t	cl;
+	char		*s;
+	
+	cl.uid = 0;
+	cl.cl = NULL;
+	
+	// make sure server is running
+	if ( !com_sv_running->boolean ) {
+		Com_Printf("Server is not running\n");
+		return cl;
+	}
+	
+	if ( Cmd_Argc() < 2 ) {
+		Com_Printf( "No player specified.\n" );
+		return cl;
+	}
+	
+	s = Cmd_Argv(1);
+	
+	SV_GetPlayerByHandleInternal(s, &cl);
 	return cl;
+}
+
+/*
+ ==================
+ SV_Cmd_GetPlayerByHandle
+ 
+ Returns the player with player id or name from Cmd_Argv(1)
+ ==================
+ */
+
+
+int SV_GetPlayerUIDByHandle( const char* handle)
+{
+	clanduid_t	cl;
+
+	SV_GetPlayerByHandleInternal(handle, &cl);
+	return cl.uid;
+}
+
+client_t* SV_GetPlayerClByHandle( const char* handle)
+{
+	clanduid_t	cl;
+	
+	SV_GetPlayerByHandleInternal(handle, &cl);
+	return cl.cl;
+}
+
+const char* SV_GetPlayerNameByHandle( const char* handle)
+{
+	clanduid_t	cl;
+	
+	SV_GetPlayerByHandleInternal(handle, &cl);
+	if(cl.cl)
+	{
+		return cl.cl->name;
+	}
+	return "";
 }
 
 /*
@@ -345,7 +403,7 @@ static void SV_ConTell( consaytype_t contype) {
 	Com_Printf( "1. Usage: tellcommand clientnumber text... \n2. Usage: tellcommand \"client by name\" text...\n" );
 	return;
     }
-    cl = SV_GetPlayerByHandle().cl;
+    cl = SV_Cmd_GetPlayerByHandle().cl;
 
     if(cl != NULL){
         SV_ConSay(cl,contype);
@@ -410,7 +468,7 @@ static void SV_DumpUser_f( void ) {
 		cl.cl = NULL;
 		cl.uid = 0;
 	}else{
-		cl = SV_GetPlayerByHandle();
+		cl = SV_Cmd_GetPlayerByHandle();
 		if ( !cl.uid && !cl.cl ) {
 			return;
 		}
@@ -600,7 +658,7 @@ static void Cmd_UnbanPlayer_f() {
         uid = 0;
         unbanstatus = SV_RemoveBan(0, guid, NULL);
     }else{
-        uid = SV_GetPlayerByHandle().uid;
+        uid = SV_Cmd_GetPlayerByHandle().uid;
         if(uid < 1){
             Com_Printf("Error: This player can not be unbanned, no such player\n");
             return;
@@ -665,7 +723,7 @@ static void Cmd_BanPlayer_f() {
 		goto gothandle;
 	}
 	
-	cl = SV_GetPlayerByHandle();	
+	cl = SV_Cmd_GetPlayerByHandle();	
 	if(cl.cl){
 		goto gothandle;
 	}
@@ -708,19 +766,25 @@ gothandle:
     }
 
 	if(cl.cl){
+		
+		if(cl.cl->power > Cmd_GetInvokerPower() && Cmd_GetInvokerPower() > 1){
+			Com_Printf("Error: You cannot ban an admin with higher power!\n");
+			return;
+		}
+		
 		//Banning
-		SV_AddBan(cl.uid, SV_RemoteCmdGetInvokerUid(), guid, cl.cl->name, (time_t)-1, banreason);
+		SV_AddBan(cl.uid, Cmd_GetInvokerUID(), guid, cl.cl->name, (time_t)-1, banreason);
 		//Messages and kick
 		if(cl.uid > 0){
 			Com_Printf( "Banrecord added for player: %s uid: %i\n", cl.cl->name, cl.uid);
 			SV_PrintAdministrativeLog( "banned player: %s uid: %i IP: %s with the following reason: %s", cl.cl->name, cl.uid, NET_AdrToString ( &cl.cl->netchan.remoteAddress ), banreason);
 			Com_sprintf(dropmsg, sizeof(dropmsg), "You have been permanently banned on this server\nYour ban will %s expire\nYour UID is: %i    Banning admin UID is: %i\nReason for this ban:\n%s",
-				"never", cl.uid, SV_RemoteCmdGetInvokerUid(), banreason);
+				"never", cl.uid, Cmd_GetInvokerUID(), banreason);
 		}else{
 			Com_Printf( "Banrecord added for player: %s guid: %s\n", cl.cl->name, cl.cl->pbguid);
 			SV_PrintAdministrativeLog( "banned player: %s guid: %s IP: %s with the following reason: %s", cl.cl->name, cl.cl->pbguid, NET_AdrToString ( &cl.cl->netchan.remoteAddress ), banreason);
 			Com_sprintf(dropmsg, sizeof(dropmsg), "You have been permanently banned on this server\nYour GUID is: %s    Banning admin UID is: %i\nReason for this ban:\n%s",
-				cl.cl->pbguid, SV_RemoteCmdGetInvokerUid(), banreason);			
+				cl.cl->pbguid, Cmd_GetInvokerUID(), banreason);			
 			
 			if(cl.cl->authentication < 1)
 				SV_PlayerAddBanByip(&cl.cl->netchan.remoteAddress, banreason, 0, cl.cl->pbguid, 0, -1);
@@ -730,7 +794,7 @@ gothandle:
 
 	}else{
 		//Banning
-		SV_AddBan(cl.uid, SV_RemoteCmdGetInvokerUid(), guid, "N/A", (time_t)-1, banreason);
+		SV_AddBan(cl.uid, Cmd_GetInvokerUID(), guid, "N/A", (time_t)-1, banreason);
 		//Messages
 		if(cl.uid > 0){
 			Com_Printf( "Banrecord added for uid: %i\n", cl.uid);
@@ -767,12 +831,12 @@ static void Cmd_TempBanPlayer_f() {
 
     if ( Cmd_Argc() < 4) {
 		Com_Printf( "Usage: tempban <user> <time> <Reason for this ban (max. 126 chars)>\n" );
-		Com_Printf( "Where user is one of the following: online-playername | online-playerslot | guid | uid\n" );
-		Com_Printf( "Where time is one of the following: XXm | XXh | XXd\n" );
+		Com_Printf( "Where user is one of the following: online-playername | online-playerslot | guid | @uid\n" );
+		Com_Printf( "Where time is one of the following: ^2XX^7m | ^2XX^7h | ^2XX^7d\n" );
 		Com_Printf( "Where reason for this ban is contains a description without the letters: \" ; %% / \\ \n" );		
 		Com_Printf( "online-playername can be a fraction of the playername. uid is a number > 0 and gets written with a leading \"@\" character\n" );
-		Com_Printf( "guid is an hex decimal string with length of 8 characters\n" );
-		Com_Printf( "XX is a decimal number representing the time of ban in minutes or hours or days\n" );		
+		Com_Printf( "guid is a hexadecimal string with length of 8 characters\n" );
+		Com_Printf( "XX is an integer representing the time of ban in minutes, hours or days\n" );		
 		return;
     }
 	/* Get the handle for this player */
@@ -781,7 +845,7 @@ static void Cmd_TempBanPlayer_f() {
 		goto gothandle;
 	}
 	
-	cl = SV_GetPlayerByHandle();	
+	cl = SV_Cmd_GetPlayerByHandle();	
 	if(cl.cl){
 		goto gothandle;
 	}
@@ -798,7 +862,7 @@ gothandle:
 	/* Get the time this ban should last */
     length = strlen(Cmd_Argv(2));
     if(length > 7){
-        Com_Printf("Error: Did not got a valid bantime\n");
+        Com_Printf("Error: Did not got a valid ban time\n");
         return;
     }
 
@@ -820,11 +884,11 @@ gothandle:
         }
     }
     if(duration < 1){
-        Com_Printf("Error: Did not got a valid bantime\n");
+        Com_Printf("Error: Did not got a valid ban time\n");
         return;
     }
     if(duration > 60*24*30){
-        Com_Printf("Error: Can not issue a temporarely ban that last longer than 30 days\n");
+        Com_Printf("Error: Can not issue a temporary ban that lasts longer than 30 days\n");
         return;
     }
 
@@ -857,24 +921,30 @@ gothandle:
         Com_Printf("Error: You have exceeded the maximum allowed length of 126 for the reason\n");
         return;
     }
+	
 
 	if(cl.cl){
-
-		SV_AddBan(cl.uid, SV_RemoteCmdGetInvokerUid(), guid, cl.cl->name, expire, banreason);
+		
+		if(cl.cl->power > Cmd_GetInvokerPower() && Cmd_GetInvokerPower() > 1){
+			Com_Printf("Error: You cannot tempban an admin with higher power!\n");
+			return;
+		}
+		
+		SV_AddBan(cl.uid, Cmd_GetInvokerUID(), guid, cl.cl->name, expire, banreason);
 
 		if( cl.uid > 0 ){
 
 			Com_Printf( "Banrecord added for player: %s uid: %i\n", cl.cl->name, cl.uid);
 			SV_PrintAdministrativeLog( "temporarily banned player: %s uid: %i IP: %s until %s with the following reason: %s", cl.cl->name, cl.uid, NET_AdrToString ( &cl.cl->netchan.remoteAddress ), endtime, banreason);
-			Com_sprintf(dropmsg, sizeof(dropmsg), "You have got a temporarily ban onto this gameserver\nYour ban will expire on: %s UTC\nYour UID is: %i    Banning admin UID is: %i\nReason for this ban:\n%s",
-				endtime, cl.uid, SV_RemoteCmdGetInvokerUid(), banreason);
+			Com_sprintf(dropmsg, sizeof(dropmsg), "You have been temporarily banned from this server\nYour ban will expire on: %s UTC\nYour UID is: %i    Banning admin UID is: %i\nReason for this ban:\n%s",
+				endtime, cl.uid, Cmd_GetInvokerUID(), banreason);
 			SV_DropClient(cl.cl, dropmsg);
 
 		}else{
 			Com_Printf( "Banrecord added for player: %s guid: %s\n", cl.cl->name, cl.cl->pbguid);
 			SV_PrintAdministrativeLog( "temporarily banned player: %s guid: %s IP: %s until %s with the following reason: %s", cl.cl->name, cl.cl->pbguid,NET_AdrToString ( &cl.cl->netchan.remoteAddress ), endtime, banreason);
-			Com_sprintf(dropmsg, sizeof(dropmsg), "You have got a temporarily ban onto this gameserver\nYour ban will expire on: %s UTC\nYour GUID is: %s    Banning admin UID is: %i\nReason for this ban:\n%s",
-				endtime, cl.cl->pbguid, SV_RemoteCmdGetInvokerUid(), banreason);
+			Com_sprintf(dropmsg, sizeof(dropmsg), "You have been temporarily banned from this server\nYour ban will expire on: %s UTC\nYour GUID is: %s    Banning admin UID is: %i\nReason for this ban:\n%s",
+				endtime, cl.cl->pbguid, Cmd_GetInvokerUID(), banreason);
 
 			if(cl.cl->authentication < 1)
 				SV_PlayerAddBanByip(&cl.cl->netchan.remoteAddress, banreason, 0, cl.cl->pbguid, 0, expire);
@@ -883,7 +953,7 @@ gothandle:
 		SV_DropClient(cl.cl, dropmsg);
 	}else{
 
-		SV_AddBan(cl.uid, SV_RemoteCmdGetInvokerUid(), guid, "N/A", expire, banreason);
+		SV_AddBan(cl.uid, Cmd_GetInvokerUID(), guid, "N/A", expire, banreason);
 
 		if(cl.uid > 0){
 			Com_Printf( "Banrecord added for uid: %i\n", cl.uid);
@@ -924,7 +994,7 @@ static void Cmd_KickPlayer_f() {
 		return;
     }
 
-    cl = SV_GetPlayerByHandle();
+    cl = SV_Cmd_GetPlayerByHandle();
 	
     if(!cl.cl)
 	{
@@ -945,6 +1015,12 @@ static void Cmd_KickPlayer_f() {
         Com_Printf("Error: You have exceeded the maximum allowed length of 126 for the reason\n");
         return;
     }
+	
+	if(cl.cl->power > Cmd_GetInvokerPower() && Cmd_GetInvokerPower() > 1){
+		Com_Printf("Error: You cannot kick an admin with higher power!\n");
+		return;
+	}
+	
 	if(cl.uid > 0){
 		Com_Printf( "Player kicked: %s ^7uid: %i\nReason: %s\n", cl.cl->name, cl.uid, kickreason);
 		SV_PrintAdministrativeLog( "kicked player: %s^7 uid: %i with the following reason: %s", cl.cl->name, cl.uid, kickreason);
@@ -952,9 +1028,12 @@ static void Cmd_KickPlayer_f() {
         Com_Printf( "Player kicked: %s ^7guid: %s\nReason: %s\n", cl.cl->name, cl.cl->pbguid, kickreason);
         SV_PrintAdministrativeLog( "kicked player: %s^7 guid: %s with the following reason: %s", cl.cl->name, cl.cl->pbguid, kickreason);
 	}
-
-	Com_sprintf(dropmsg, sizeof(dropmsg), "Player kicked:\nAdmin UID is: %i\nReason for this kick:\n%s", 
-				SV_RemoteCmdGetInvokerUid(), kickreason);
+	
+	if(Cmd_GetInvokerUID() > 0){
+		Com_sprintf(dropmsg, sizeof(dropmsg), "Player kicked:\nAdmin UID is: %i\nReason for this kick:\n%s", Cmd_GetInvokerUID(), kickreason);
+	}else{
+		Com_sprintf(dropmsg, sizeof(dropmsg), "Player kicked:\nReason for this kick:\n%s", kickreason);
+	}
 	SV_DropClient(cl.cl, dropmsg);
 }
 
@@ -991,9 +1070,9 @@ static void SV_MiniStatus_f( void ) {
 
 	Com_Printf ("map: %s\n", sv_mapname->string );
 
-	Com_Printf ("num score ping uid       name                             address                                             FPS\n");
+	Com_Printf ("num score ping uid/guid   name                             address                                             FPS XVer\n");
 
-	Com_Printf ("--- ----- ---- --------- -------------------------------- --------------------------------------------------- ---\n");
+	Com_Printf ("--- ----- ---- ---------- -------------------------------- --------------------------------------------------- --- ----\n");
 	for (i=0,cl=svs.clients, gclient = level.clients ; i < sv_maxclients->integer ; i++, cl++, gclient++)
 	{
 		if (!cl->state)
@@ -1018,11 +1097,23 @@ static void SV_MiniStatus_f( void ) {
 			Com_Printf ("%4i ", ping);
 		}
 
-
+		
 		if(cl->uid > 0){
-			Com_Printf ("%9i ", cl->uid );
+			Com_Printf ("@%9i ", cl->uid );
+
 		}else{
-			Com_Printf ("      N/A ");
+
+			s = cl->pbguid + 24;
+			Com_Printf ("%s", s);
+			l = 11 - strlen(s);
+
+			j = 0;
+
+			do
+			{
+				Com_Printf(" ");
+				j++;
+			} while(j < l);
 		}
 
 		Com_Printf ("%s", cl->name);
@@ -1056,6 +1147,8 @@ static void SV_MiniStatus_f( void ) {
 		} while(j < l);
 
 		Com_Printf("%3i ", cl->clFPS);
+
+		Com_Printf("%s ", cl->xversion);
 
 		odd = ~odd;
 		Com_Printf ("\n");
@@ -1107,15 +1200,15 @@ static void Cmd_ExecuteTranslatedCommand_f(){
     while(*cmdstring){
         if(*cmdstring == '$'){
             if(!Q_strncmp(cmdstring, "$uid", 4)){
-                Com_sprintf(tmp, sizeof(outstr) - (tmp - outstr), "%i", SV_RemoteCmdGetInvokerUid());
+                Com_sprintf(tmp, sizeof(outstr) - (tmp - outstr), "%i", Cmd_GetInvokerUID());
                 tmp += strlen(tmp);
                 cmdstring += 4;
             }else if(!Q_strncmp(cmdstring, "$clnum", 6)){
-                Com_sprintf(tmp, sizeof(outstr) - (tmp - outstr), "%i", SV_RemoteCmdGetInvokerClnum());
+                Com_sprintf(tmp, sizeof(outstr) - (tmp - outstr), "%i", Cmd_GetInvokerClnum());
                 tmp += strlen(tmp);
                 cmdstring += 6;
             }else if(!Q_strncmp(cmdstring, "$pow", 4)){
-                Com_sprintf(tmp, sizeof(outstr) - (tmp - outstr), "%i", SV_RemoteCmdGetInvokerPower());
+                Com_sprintf(tmp, sizeof(outstr) - (tmp - outstr), "%i", Cmd_GetInvokerPower());
                 tmp += strlen(tmp);
                 cmdstring += 4;
             }else if(!Q_strncmp(cmdstring, "$arg", 4)){
@@ -1194,8 +1287,7 @@ static void Cmd_AddTranslatedCommand_f() {
     Q_strncpyz(psvs.translatedCmd[free].cmdname, cmdname, sizeof(psvs.translatedCmd[free].cmdname));
     Q_strncpyz(psvs.translatedCmd[free].cmdargument, string, sizeof(psvs.translatedCmd[free].cmdargument));
 
-    Cmd_AddCommand (psvs.translatedCmd[free].cmdname, Cmd_ExecuteTranslatedCommand_f);
-    Cmd_SetPower(psvs.translatedCmd[free].cmdname, 100);
+    Cmd_AddPCommand (psvs.translatedCmd[free].cmdname, Cmd_ExecuteTranslatedCommand_f, 100);
     Com_Printf("Added custom command: %s -> %s\n", psvs.translatedCmd[free].cmdname, psvs.translatedCmd[free].cmdargument);
 
 }
@@ -1228,7 +1320,7 @@ static void SV_StopRecord_f( void ) {
 	}
 
 
-	cl = SV_GetPlayerByHandle();
+	cl = SV_Cmd_GetPlayerByHandle();
 	if(!cl.cl){
 		Com_Printf("Error: This player is not online and can not be recorded\n");
 		return;
@@ -1285,7 +1377,7 @@ static void SV_Record_f( void ) {
 		return;
 	}
 
-	cl = SV_GetPlayerByHandle();
+	cl = SV_Cmd_GetPlayerByHandle();
 	if(!cl.cl){
 		Com_Printf("Error: This player is not online and can not be recorded\n");
 		return;
@@ -1312,7 +1404,7 @@ static void SV_ShowRules_f(){
     client_t* cl;
     int i;
 
-    if(SV_RemoteCmdGetInvokerPower() > 20){
+    if(Cmd_GetInvokerPower() > 20){
 
 	for(i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++)
 	{
@@ -1323,7 +1415,7 @@ static void SV_ShowRules_f(){
 	}
 
     }else{
-        clnum = SV_RemoteCmdGetInvokerClnum();
+        clnum = Cmd_GetInvokerClnum();
         if(clnum < 64){
             cl = &svs.clients[clnum];
             cl->msgType = 1;
@@ -1541,7 +1633,7 @@ static void SV_SetPerk_f( void ){
     unsigned int perkIndex;
     unsigned int clnum;
 
-    cl = SV_GetPlayerByHandle();
+    cl = SV_Cmd_GetPlayerByHandle();
     if(!cl.cl)
         return;
 
@@ -1587,7 +1679,7 @@ static void SV_SetGravity_f( void ){
     int gravity;
     unsigned int clnum;
 
-    cl = SV_GetPlayerByHandle();
+    cl = SV_Cmd_GetPlayerByHandle();
     if(!cl.cl)
         return;
 
@@ -1614,7 +1706,7 @@ static void SV_SetStance_f( void ){
     int gravity;
     unsigned int clnum;
 
-    cl = SV_GetPlayerByHandle();
+    cl = SV_Cmd_GetPlayerByHandle();
     if(!cl.cl)
         return;
 
@@ -1653,121 +1745,6 @@ static void SV_Find_f( void ){
     }
 }
 
-/*
-
-void Mac_Register_f(){
-    if(Cmd_Argc()!=3){
-	Com_Printf("Usage: %s <login - no spaces allowed> <password - no spaces allowed>\n",Cmd_Argv(0));
-	return;
-    }
-    int uid = Mac_Register(Cmd_Argv(1),Cmd_Argv(2));
-    if(uid == -1){
-        Com_Printf("Error: user %s is already registered!",Cmd_Argv(1));
-        return;
-    }
-    if(uid<0){
-        Com_Printf("Error: failed to register the client.");
-    }
-    Com_Printf("UID for the registered user: %d.\n",uid);
-
-}
-
-*/
-
-
-/*
-============
-SV_SetAdmin_f
-============
-*/
-
-static void SV_SetAdmin_f() {
-
-    int power;
-    int uid = 0;
-    char *guid = NULL;
-
-    power = atoi(Cmd_Argv(2));
-
-    if ( Cmd_Argc() != 3 || power < 1 || power > 100) {
-        Com_Printf( "Usage: setAdmin <user> <power>\n" );
-        Com_Printf( "Where user is one of the following: online-playername | online-playerslot | uid\n" );
-		Com_Printf( "Where power is one of the following: Any number between 1 and 100\n" );
-		Com_Printf( "online-playername can be a fraction of the playername. uid is a number > 0 and gets written with a leading \"@\" character\n" );
-        Com_Printf( "Note: Usage of GUIDs is deprecated for security reasons. Use authsetadmin instead!\n" );
-        Com_Printf( "Note: This command can also be used to change the power of an admin\n" );		
-        return;
-    }
-
-    uid = SV_GetPlayerByHandle().uid;
-	
-	NV_ProcessBegin();
-    SV_RemoteCmdSetAdmin(uid, guid, power);
-	NV_ProcessEnd();
-}
-
-
-/*
-============
-SV_UnsetAdmin_f
-============
-*/
-
-static void SV_UnsetAdmin_f() {
-
-    int uid = 0;
-    char *guid = NULL;
-
-    if (Cmd_Argc() != 2) {
-		Com_Printf( "Usage: unsetAdmin <user>\n" );
-        Com_Printf( "Where user is one of the following: online-playername | online-playerslot | uid\n" );
-		Com_Printf( "online-playername can be a fraction of the playername. uid is a number > 0 and gets written with a leading \"@\" character\n" );
-        return;
-    }
-
-	uid = SV_GetPlayerByHandle().uid;
-	if(uid < 1)
-	{
-		Com_Printf("Error: No such player\n");
-		return;
-    }
-	SV_RemoteCmdUnsetAdmin(uid, guid);
-
-}
-
-
-
-/*
-============
-SV_SetPermission_f
-Changes minimum-PowerLevel of a command
-============
-*/
-
-static void SV_SetPermission_f() {
-
-    if ( Cmd_Argc() != 3 || atoi(Cmd_Argv(2)) < 1 || atoi(Cmd_Argv(2)) > 100) {
-		Com_Printf( "Usage: setCmdMinPower <command> <minpower>\n" );
-		Com_Printf( "Where power is one of the following: Any number between 1 and 100\n" );
-        Com_Printf( "Where command is any command you can invoke from console / rcon but no cvars\n" );
-		return;
-    }
-    SV_RemoteCmdSetPermission(Cmd_Argv(1), atoi(Cmd_Argv(2)) );
-
-}
-
-/*
-============
-SV_ListAdmins_f
-============
-*/
-
-static void SV_ListAdmins_f()
-{
-
-    SV_RemoteCmdListAdmins();
-
-}
 
 static void SV_ShowConfigstring_f()
 {
@@ -1783,7 +1760,7 @@ static void SV_ShowConfigstring_f()
 
     index = atoi(Cmd_Argv(1));
     SV_GetConfigstring(index, buffer, sizeof(buffer));
-    Com_Printf("Configstring is: %s\n", buffer);
+    Com_Printf("CS len is %d CS is: %s\n", strlen(buffer), buffer);
 }
 
 
@@ -1838,6 +1815,20 @@ qboolean SV_RunDownload(const char* url, const char* filename)
 	return qtrue;
 }
 
+void SV_DemoCompletedExec(const char* mapname)
+{
+	char cmdline[MAX_STRING_CHARS];
+
+	if(!*sv_mapDownloadCompletedCmd->string)
+		return;
+
+	Com_sprintf(cmdline, sizeof(cmdline), "\"%s/%s\" \"%s/usermaps/%s\"", fs_homepath->string, sv_mapDownloadCompletedCmd->string, fs_homepath->string, mapname);
+
+	Sys_DoStartProcess(cmdline);
+
+	Sys_TermProcess();
+}
+
 void SV_DownloadMapThread(char *inurl)
 {
 	int len;
@@ -1847,6 +1838,7 @@ void SV_DownloadMapThread(char *inurl)
 	char *mapname;
 	char filename[MAX_OSPATH];
 	static qboolean downloadActive = 0;
+
 	
 	Q_strncpyz(url, inurl, sizeof(url));
 	Z_Free(inurl);
@@ -1920,14 +1912,14 @@ void SV_DownloadMapThread(char *inurl)
 	
 	if(SV_RunDownload(dlurl, filename) == qfalse)
 	{
-		Com_Printf("File %s was not downloaded. This map has maybe no .iwd file\n");
-		Com_Printf("Download of map \"%s\" has been completed\n", mapname);
-		downloadActive = qfalse;
-		return;
-	}
-	Com_Printf("Received file: %s\n", filename );
+		Com_Printf("File %s was not downloaded. This map has maybe no .iwd file\n", filename);
+	}else{
+		Com_Printf("Received file: %s\n", filename );
+        }
 	Com_Printf("Download of map \"%s\" has been completed\n", mapname);
 	downloadActive = qfalse;
+
+	Sys_SetupThreadCallback(SV_DemoCompletedExec, mapname);
 
 }
 
@@ -1969,6 +1961,37 @@ void SV_DownloadMap_f()
 	}
 }
 
+void SV_ChangeGametype_f()
+{
+
+    char gametypestring[32];
+    char* find;
+
+    if(Cmd_Argc() != 2)
+    {
+        Com_Printf( "Usage: gametype <gametypename>\n" );
+        return;
+    }
+
+    Q_strncpyz(gametypestring, Cmd_Argv(1), sizeof(gametypestring));
+
+    if(strchr(gametypestring, ';'))
+    {
+        return;
+    }
+
+    find = strchr(gametypestring, '\n');
+
+    if(find)
+    {
+        *find = '\0';
+    }
+
+    Cvar_Set("g_gametype", gametypestring);
+    Cbuf_AddText("map_restart\n");
+
+}
+
 
 void SV_AddOperatorCommands(){
 	
@@ -1978,40 +2001,37 @@ void SV_AddOperatorCommands(){
 		return;
 	}
 	initialized = qtrue;
-	
+
 	Cmd_AddCommand ("killserver", SV_KillServer_f);
 	Cmd_AddCommand ("setPerk", SV_SetPerk_f);
-	Cmd_AddCommand ("map_restart", SV_MapRestart_f);
+	Cmd_AddPCommand ("map_restart", SV_MapRestart_f, 50);
 	Cmd_AddCommand ("fast_restart", SV_FastRestart_f);
-	Cmd_AddCommand ("rules", SV_ShowRules_f);
+	Cmd_AddPCommand ("rules", SV_ShowRules_f, 1);
 	Cmd_AddCommand ("heartbeat", SV_Heartbeat_f);
-	Cmd_AddCommand ("kick", Cmd_KickPlayer_f);
+	Cmd_AddPCommand ("kick", Cmd_KickPlayer_f, 35);
 	Cmd_AddCommand ("clientkick", Cmd_KickPlayer_f);
 	Cmd_AddCommand ("onlykick", Cmd_KickPlayer_f);
-	Cmd_AddCommand ("unban", Cmd_UnbanPlayer_f);
+	Cmd_AddPCommand ("unban", Cmd_UnbanPlayer_f, 80);
 	Cmd_AddCommand ("unbanUser", Cmd_UnbanPlayer_f);
-	Cmd_AddCommand ("permban", Cmd_BanPlayer_f);
-	Cmd_AddCommand ("tempban", Cmd_TempBanPlayer_f);
+	Cmd_AddPCommand ("permban", Cmd_BanPlayer_f, 80);
+	Cmd_AddPCommand ("tempban", Cmd_TempBanPlayer_f, 50);
 	Cmd_AddCommand ("bpermban", Cmd_BanPlayer_f);
 	Cmd_AddCommand ("btempban", Cmd_TempBanPlayer_f);
 	Cmd_AddCommand ("banUser", Cmd_BanPlayer_f);
 	Cmd_AddCommand ("banClient", Cmd_BanPlayer_f);
 	Cmd_AddCommand ("ministatus", SV_MiniStatus_f);
-	Cmd_AddCommand ("say", SV_ConSayChat_f);
+	Cmd_AddPCommand ("say", SV_ConSayChat_f, 70);
 	Cmd_AddCommand ("consay", SV_ConSayConsole_f);
-	Cmd_AddCommand ("screensay", SV_ConSayScreen_f);
-	Cmd_AddCommand ("tell", SV_ConTellChat_f);
+	Cmd_AddPCommand ("screensay", SV_ConSayScreen_f, 70);
+	Cmd_AddPCommand ("tell", SV_ConTellChat_f, 70);
 	Cmd_AddCommand ("contell", SV_ConTellConsole_f);
-	Cmd_AddCommand ("screentell", SV_ConTellScreen_f);
+	Cmd_AddPCommand ("screentell", SV_ConTellScreen_f, 70);
 	Cmd_AddCommand ("dumpuser", SV_DumpUser_f);
 	Cmd_AddCommand ("stringUsage", SV_StringUsage_f);
 	Cmd_AddCommand ("scriptUsage", SV_ScriptUsage_f);
 	
-	Cmd_AddCommand ("setadmin", SV_SetAdmin_f);
-	Cmd_AddCommand ("unsetadmin", SV_UnsetAdmin_f);
-	
-	Cmd_AddCommand ("stoprecord", SV_StopRecord_f);
-	Cmd_AddCommand ("record", SV_Record_f);
+	Cmd_AddPCommand("stoprecord", SV_StopRecord_f, 70);
+	Cmd_AddPCommand("record", SV_Record_f, 50);
 	
 	if(Com_IsDeveloper()){
 		Cmd_AddCommand ("showconfigstring", SV_ShowConfigstring_f);
@@ -2029,21 +2049,21 @@ void SV_AddSafeCommands(){
 		return;
 	}
 	initialized = qtrue;
-	
-	Cmd_AddCommand ("systeminfo", SV_Systeminfo_f);
-	Cmd_AddCommand ("serverinfo", SV_Serverinfo_f);
-	Cmd_AddCommand ("map", SV_Map_f);
+
+	Cmd_AddPCommand ("systeminfo", SV_Systeminfo_f, 1);
+	Cmd_AddPCommand ("serverinfo", SV_Serverinfo_f, 1);
+	Cmd_AddPCommand ("map", SV_Map_f, 60);
 	Cmd_AddCommand ("map_rotate", SV_MapRotate_f);
 	Cmd_AddCommand ("addAdvertMsg", SV_AddAdvert_f);
 	Cmd_AddCommand ("addRuleMsg", SV_AddRule_f);
 	Cmd_AddCommand ("clearAllMsg", SV_ClearAllMessages_f);
-	Cmd_AddCommand ("dumpbanlist", SV_DumpBanlist_f);
+	Cmd_AddPCommand ("dumpbanlist", SV_DumpBanlist_f, 30);
 	Cmd_AddCommand ("writenvcfg", NV_WriteConfig);
-	Cmd_AddCommand ("setCmdMinPower", SV_SetPermission_f);
-	Cmd_AddCommand ("adminlist", SV_ListAdmins_f);
 	Cmd_AddCommand ("status", SV_Status_f);
 	Cmd_AddCommand ("addCommand", Cmd_AddTranslatedCommand_f);
 	Cmd_AddCommand ("downloadmap", SV_DownloadMap_f);
+	Cmd_AddPCommand ("gametype", SV_ChangeGametype_f, 80);
+
 }
 
 

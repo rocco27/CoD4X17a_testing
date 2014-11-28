@@ -32,7 +32,6 @@
  *                                         *
  *=========================================*/
 
-
 P_P_F void *Plugin_Malloc(size_t size)
 {
     volatile int pID;
@@ -88,11 +87,11 @@ P_P_F clientScoreboard_t Plugin_GetClientScoreboard(int clientNum)
 }
 P_P_F int Plugin_Cmd_GetInvokerUid()
 {
-    return SV_RemoteCmdGetInvokerUid();
+    return Cmd_GetInvokerUID();
 }
 P_P_F int Plugin_Cmd_GetInvokerSlot()
 {
-    return SV_RemoteCmdGetInvokerClnum();
+    return Cmd_GetInvokerClnum();
 }
 P_P_F int Plugin_GetPlayerUid(int slot)
 {
@@ -568,13 +567,13 @@ P_P_F void Plugin_BanClient( unsigned int clientnum, int duration, int invokerid
 	{
 		Com_Printf( "Banrecord added for player: %s uid: %i\n", cl->name, cl->uid);
 		SV_PrintAdministrativeLog( "Banned player: %s uid: %i until %s with the following reason: %s", cl->name, cl->uid, endtime, banreason);
-		Com_sprintf(dropmsg, sizeof(dropmsg), "You have got a ban onto this gameserver\nYour ban will expire on: %s\nYour UID is: %i    Banning admin UID is: %i\nReason for this ban:\n%s",
+		Com_sprintf(dropmsg, sizeof(dropmsg), "You have been banned from this server\nYour ban will expire on: %s\nYour UID is: %i    Banning admin UID is: %i\nReason for this ban:\n%s",
 			endtime, cl->uid, invokerid, banreason);
 
 	}else{
 		Com_Printf( "Banrecord added for player: %s guid: %s\n", cl->name, cl->pbguid);
 		SV_PrintAdministrativeLog( "Banned player: %s guid: %s until %s with the following reason: %s", cl->name, cl->pbguid, endtime, banreason);
-		Com_sprintf(dropmsg, sizeof(dropmsg), "You have got a ban onto this gameserver\nYour ban will expire on: %s\nYour GUID is: %s    Banning admin UID is: %i\nReason for this ban:\n%s",
+		Com_sprintf(dropmsg, sizeof(dropmsg), "You have been banned from this server\nYour ban will expire on: %s\nYour GUID is: %s    Banning admin UID is: %i\nReason for this ban:\n%s",
 			endtime, cl->pbguid, invokerid, banreason);
 
 		if(cl->authentication < 1)
@@ -583,4 +582,19 @@ P_P_F void Plugin_BanClient( unsigned int clientnum, int duration, int invokerid
 		}
 	}
 	SV_DropClient(cl, dropmsg);
+}
+
+P_P_F gentity_t* Plugin_GetGentityForEntityNum(int entnum)
+{
+    return &g_entities[entnum];
+}
+
+P_P_F client_t* Plugin_GetClientForClientNum(int clientnum)
+{
+    return &svs.clients[clientnum];
+}
+
+P_P_F int Plugin_FS_SV_WriteFile( const char *qpath, const void *buffer, int size)
+{
+    return FS_SV_HomeWriteFile( qpath, buffer, size);
 }

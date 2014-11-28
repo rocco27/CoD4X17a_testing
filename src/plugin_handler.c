@@ -44,7 +44,6 @@ pluginWrapper_t pluginFunctions;
 char PHandler_Events[PLUGINS_ITEMCOUNT][32]={
 
     "OnInfoRequest",
-    
     "OnPlayerDC",
     "OnPlayerConnect",
     "OnExitLevel",
@@ -62,9 +61,10 @@ char PHandler_Events[PLUGINS_ITEMCOUNT][32]={
     "OnPreFastRestart",
     "OnPostFastRestart",
     "OnPlayerConnectAuthFail",
-	"OnClientUserinfoChanged",
+    "OnClientUserinfoChanged",
     "OnClientMoveCommand",
-	"OnPlayerWantReservedSlot"
+    "OnPlayerWantReservedSlot",
+    "OnFilesystemStarted"
 };
 
 void PHandler_Init() // Initialize the Plugin Handler's data structures and add commands
@@ -184,7 +184,7 @@ void PHandler_CloseTempFile(char* filepath)
 
 #define PLUGINCENSOR_HASH "bfb496df0acc1bd01a0789b8d35d8081143db883297206aa"
 #define PLUGINANTISPAM_HASH "7fc95f3902bd809a1e50a783fbb482044f67ad8927259a36"
-#define PLUGINGAMERANGER_HASH "25feab2d90616aa1ddf507cc9a4e4093050fc777f6c16c4c"
+#define PLUGINGAMERANGER_HASH "6609a69715a41b486611fa1c461f90acfed836eac0e699d8"
 
 
 void PHandler_Load(char* name) // Load a plugin, safe for use
@@ -273,7 +273,7 @@ void PHandler_Load(char* name) // Load a plugin, safe for use
     pluginFunctions.plugins[i].enabled = qtrue;
     Q_strncpyz(pluginFunctions.plugins[i].name, name, sizeof(pluginFunctions.plugins[i].name));
     pluginFunctions.initializing_plugin = qtrue;
-    
+
     if(pluginFunctions.plugins[i].OnInit==NULL){
         Com_Printf("Error loading plugin's OnInit function.\nPlugin load failed.\n");
         pluginFunctions.initializing_plugin = qfalse;
@@ -281,9 +281,40 @@ void PHandler_Load(char* name) // Load a plugin, safe for use
         Sys_CloseLibrary(lib_handle);
         return;
     }
+
+    pluginFunctions.hasControl = PLUGIN_UNKNOWN;
+    Com_Printf("Plugin's OnInit executed successfully!\n");
+    //    Save info about the loaded plugin
+    pluginFunctions.initializing_plugin = qfalse;
+    pluginFunctions.loadedPlugins++;
+    pluginFunctions.plugins[i].lib_handle = lib_handle;
+
+    if(pluginFunctions.plugins[i].OnInfoRequest){
+        Com_DPrintf("Fetching plugin information...\n");
+        pluginFunctions.hasControl = i;
+        (*pluginFunctions.plugins[i].OnInfoRequest)(&info);
+        pluginFunctions.hasControl = PLUGIN_UNKNOWN;
+			
+        if(info.handlerVersion.major != PLUGIN_HANDLER_VERSION_MAJOR || (info.handlerVersion.minor - info.handlerVersion.minor %100) != (PLUGIN_HANDLER_VERSION_MINOR - PLUGIN_HANDLER_VERSION_MINOR %100))
+	{
+            Com_PrintError("This plugin might not be compatible with this server version! Requested plugin handler version: %d.%d, server's plugin handler version: %d.%d. Unloading the plugin...\n",info.handlerVersion.major,info.handlerVersion.minor, PLUGIN_HANDLER_VERSION_MAJOR,PLUGIN_HANDLER_VERSION_MINOR);
+            PHandler_Unload(i);
+            return;
+        }
+
+    }else{
+
+        Com_PrintError("function OnInfoRequest not found in the plugin file. Unloading...\n");
+        PHandler_Unload(i);
+        return;
+
+    }
+
     Com_DPrintf("Executing plugin's OnInit...\n");
+
     pluginFunctions.hasControl = i;
-    if((*pluginFunctions.plugins[i].OnInit)()<0){
+    if((*pluginFunctions.plugins[i].OnInit)()<0)
+    {
         pluginFunctions.hasControl = PLUGIN_UNKNOWN;
         Com_Printf("Error in plugin's OnInit function!\nPlugin load failed.\n");
         pluginFunctions.initializing_plugin = qfalse;
@@ -291,39 +322,12 @@ void PHandler_Load(char* name) // Load a plugin, safe for use
         Sys_CloseLibrary(lib_handle);
         return;
     }
-    else{
-        pluginFunctions.hasControl = PLUGIN_UNKNOWN;
-        Com_Printf("Plugin's OnInit executed successfully!\n");
-        //    Save info about the loaded plugin
-        pluginFunctions.initializing_plugin = qfalse;
-        pluginFunctions.loadedPlugins++;
-        pluginFunctions.plugins[i].lib_handle = lib_handle;
 
-        if(pluginFunctions.plugins[i].OnInfoRequest){
-            Com_DPrintf("Fetching plugin information...\n");
-            pluginFunctions.hasControl = i;
-            (*pluginFunctions.plugins[i].OnInfoRequest)(&info);
-            pluginFunctions.hasControl = PLUGIN_UNKNOWN;
-			
-            if(info.handlerVersion.major != PLUGIN_HANDLER_VERSION_MAJOR || (info.handlerVersion.minor - info.handlerVersion.minor %100) != (PLUGIN_HANDLER_VERSION_MINOR - PLUGIN_HANDLER_VERSION_MINOR %100))
-			{
-                Com_PrintError("This plugin might not be compatible with this server version! Requested plugin handler version: %d.%d, server's plugin handler version: %d.%d. Unloading the plugin...\n",info.handlerVersion.major,info.handlerVersion.minor, PLUGIN_HANDLER_VERSION_MAJOR,PLUGIN_HANDLER_VERSION_MINOR);
-                PHandler_Unload(i);
-                return;
-            }
-        }
-        else{
-            Com_PrintError("function OnInfoRequest not found in the plugin file. Unloading...\n");
-            PHandler_Unload(i);
-            return;
-
-        }
-        Com_Printf("Plugin %s loaded successfully. Server is currently running %d plugins.\n",pluginFunctions.plugins[i].name,pluginFunctions.loadedPlugins);
-        return;
-    }
-
+    Com_Printf("Plugin %s loaded successfully. Server is currently running %d plugins.\n",pluginFunctions.plugins[i].name,pluginFunctions.loadedPlugins);
+    return;
 
 }
+
 void PHandler_Unload(int id) // Unload a plugin, safe for use.
 {
     static qboolean unloading = qfalse;

@@ -62,6 +62,7 @@ typedef unsigned short sa_family_t;
 #	define EAFNOSUPPORT		WSAEAFNOSUPPORT
 #	define ECONNRESET		WSAECONNRESET
 #	define EINPROGRESS		WSAEINPROGRESS
+#	define EINTR			WSAEINTR
 typedef u_long	ioctlarg_t;
 #	define socketError		WSAGetLastError( )
 
@@ -148,7 +149,7 @@ void NET_TCPConnectionClosed(netadr_t* adr, int sock, int connectionId, int serv
 #endif
 #ifndef __NET_GAME_H__
 #pragma message "Function NET_UDPPacketEvent is undefined"
-void NET_UDPPacketEvent(netadr_t* from, void* data, int len){}
+void NET_UDPPacketEvent(netadr_t* from, void* data, int len, int buflen){}
 #endif
 #ifndef __NET_GAME_H__
 #pragma message "Function NET_TCPAuthPacketEvent is undefined"
@@ -1091,6 +1092,8 @@ int NET_IPSocket( char *net_interface, int port, int *err, qboolean tcp) {
 	ioctlarg_t			_true = 1;
 	int				i = 1;
 	int				tos = IPEFF_EF;
+	int				reuse;
+//	struct	linger			so_linger;
 
 	*err = 0;
 
@@ -1132,6 +1135,22 @@ int NET_IPSocket( char *net_interface, int port, int *err, qboolean tcp) {
 		if( setsockopt( newsocket, IPPROTO_IP, IP_TOS, (char *) &tos, sizeof(tos) ) == SOCKET_ERROR ) {
 			Com_PrintWarning( "NET_IPSocket: setsockopt IP_TOS: %s\n", NET_ErrorString() );
 		}
+	}else{
+/*
+	// Short WAIT_STATE time
+		so_linger.l_onoff = 1;
+		so_linger.l_linger = 2; //Two seconds timeout
+
+		if( setsockopt( newsocket, SOL_SOCKET, SO_LINGER, (char *) &so_linger, sizeof(so_linger) ) == SOCKET_ERROR ) {
+			Com_PrintWarning( "NET_IPSocket: setsockopt SO_LINGER: %s\n", NET_ErrorString() );
+		}
+*/
+		reuse = 1;
+
+		if( setsockopt( newsocket, SOL_SOCKET, SO_REUSEADDR, (char *) &reuse, sizeof(reuse) ) == SOCKET_ERROR ) {
+			Com_PrintWarning( "NET_IPSocket: setsockopt SO_REUSEADDR: %s\n", NET_ErrorString() );
+		}
+
 	}
 
 	if( !net_interface || !net_interface[0]) {
@@ -1204,7 +1223,8 @@ int NET_IP6Socket( char *net_interface, int port, struct sockaddr_in6 *bindto, i
 	SOCKET				newsocket;
 	struct sockaddr_in6		address;
 	ioctlarg_t			_true = 1;
-
+//	struct	linger			so_linger;
+	int				reuse;
 	*err = 0;
 
 	if( net_interface )
@@ -1246,6 +1266,28 @@ int NET_IP6Socket( char *net_interface, int port, struct sockaddr_in6 *bindto, i
 		*err = socketError;
 		closesocket(newsocket);
 		return INVALID_SOCKET;
+	}
+
+	if(tcp)
+	{
+/*
+	// Short WAIT_STATE time
+
+		so_linger.l_onoff = 1;
+		so_linger.l_linger = 2; //Two seconds timeout
+
+		if( setsockopt( newsocket, SOL_SOCKET, SO_LINGER, (char *) &so_linger, sizeof(so_linger) ) == SOCKET_ERROR ) {
+			Com_PrintWarning( "NET_IP6Socket: setsockopt SO_LINGER: %s\n", NET_ErrorString() );
+		}
+*/
+
+		reuse = 1;
+
+		if( setsockopt( newsocket, SOL_SOCKET, SO_REUSEADDR, (char *) &reuse, sizeof(reuse) ) == SOCKET_ERROR ) {
+			Com_PrintWarning( "NET_IP6Socket: setsockopt SO_REUSEADDR: %s\n", NET_ErrorString() );
+		}
+
+
 	}
 
 #ifdef IPV6_V6ONLY
@@ -1671,14 +1713,17 @@ static void NET_GetLocalAddress(void)
 }
 #else
 static void NET_GetLocalAddress( void ) {
-	char				hostname[256];
+	char hostname[256];
+	char addrStr[128];
 	struct addrinfo	hint;
 	struct sockaddr_storage localhostadr;
 	struct addrinfo	*res = NULL;
 
 	qboolean has_ip4 = qfalse;
 	qboolean has_ip6 = qfalse;
-
+	qboolean has_loopback4 = qfalse;
+	qboolean has_loopback6 = qfalse;
+	
 	numIP = 0;
 
 	if(gethostname( hostname, 256 ) == SOCKET_ERROR)
@@ -1712,22 +1757,30 @@ static void NET_GetLocalAddress( void ) {
 		{
 			if(search->ai_family == AF_INET)
 			{
+				Sys_SockaddrToString(addrStr, sizeof(addrStr), search->ai_addr);
 				NET_AddLocalAddress("", search->ai_addr, (struct sockaddr *) &mask4);
 				has_ip4 = qtrue;
-				
+				if(strcmp(addrStr, "127.0.0.1") == 0)
+				{
+					has_loopback4 = qtrue;
+				}
 			}else if(search->ai_family == AF_INET6){
 				NET_AddLocalAddress("", search->ai_addr, (struct sockaddr *) &mask6);
 				has_ip6 = qtrue;
-				
+				Sys_SockaddrToString(addrStr, sizeof(addrStr), search->ai_addr);
+				if(strcmp(addrStr, "::1") == 0)
+				{
+					has_loopback6 = qtrue;
+				}
 			}
 		}
 		/* Windows doesn't seem to add the loopback interface to its list of available interfaces. We have to assume they are there. */
-		if( has_ip4 && Sys_StringToSockaddr("localhost", (struct sockaddr *) &localhostadr, sizeof(localhostadr), AF_INET ))
+		if( has_ip4 && !has_loopback4 && Sys_StringToSockaddr("localhost", (struct sockaddr *) &localhostadr, sizeof(localhostadr), AF_INET ))
 		{
 			NET_AddLocalAddress("localhost", (struct sockaddr *) &localhostadr, (struct sockaddr *) &mask4);
 		}
 		
-		if( has_ip6 && Sys_StringToSockaddr("localhost", (struct sockaddr *) &localhostadr, sizeof(localhostadr), AF_INET6 ))
+		if( has_ip6 && !has_loopback6 && Sys_StringToSockaddr("localhost", (struct sockaddr *) &localhostadr, sizeof(localhostadr), AF_INET6 ))
 		{
 			NET_AddLocalAddress("localhost", (struct sockaddr *) &localhostadr, (struct sockaddr *) &mask6);
 		}
@@ -1875,6 +1928,7 @@ void NET_OpenIP( void ) {
 							{
 								validsock6 = qfalse;	//This is an invalid port
 								closesocket( ip_socket[j].sock );
+								ip_socket[j].sock = INVALID_SOCKET;
 							}
 						}
 						socketindex6 = 0;
@@ -1976,6 +2030,7 @@ void NET_OpenIP( void ) {
 							{
 								validsock = qfalse;	//This is an invalid port
 								closesocket( ip_socket[j].sock );
+								ip_socket[j].sock = INVALID_SOCKET;
 							}
 						}
 						socketindex = socketindex6;
@@ -2466,7 +2521,9 @@ void NET_TcpServerPacketEventLoop()
 						if(ret > 0)
 						{
 							cursize = ret;
-                        }
+						}else{
+							break;
+						}
 
 						if(conn->lastMsgTime == 0 || conn->remote.sock < 1)
 						{
@@ -2477,7 +2534,7 @@ void NET_TcpServerPacketEventLoop()
 
 						}else if(conn->state == TCP_AUTHSUCCESSFULL){
 							tcpServer.activeConnectionCount++;
-							Com_PrintNoRedirect("New connection accepted for: %s from type: %d\n", NET_AdrToString(&conn->remote), conn->serviceId);
+							Com_PrintNoRedirect("New connection accepted for: %s from type: %x\n", NET_AdrToString(&conn->remote), conn->serviceId);
 						}
 						break;
 
@@ -2870,7 +2927,7 @@ __optimize3 __regparm1 qboolean NET_Event(int socket)
 					continue;          // drop this packet
 			}
 
-			NET_UDPPacketEvent(&from, bufData, len);
+			NET_UDPPacketEvent(&from, bufData, len, sizeof(bufData));
 
 				//Com_RunAndTimeServerPacket(&from, &netmsg);
 			//else
@@ -2984,6 +3041,10 @@ __optimize3 __regparm1 qboolean NET_Sleep(unsigned int usec)
 	retval = select(highestfd + 1, &fdr, NULL, NULL, &timeout);
 	
 	if(retval < 0){
+		if(socketError == EINTR)
+		{
+			return qfalse;
+		}
 		Com_PrintWarningNoRedirect("NET_Sleep: select() syscall failed: %s\n", NET_ErrorString());
 		return qfalse;
 	}
@@ -3096,4 +3157,10 @@ int NET_StringToAdr( const char *s, netadr_t *a, netadrtype_t family )
 		a->port = BigShort(PORT_SERVER);
 		return 2;
 	}
+}
+
+const char* NET_GetHostAddress(char* adrstrbuf, int len)
+{
+	Com_sprintf(adrstrbuf, len, "%s:%hd\n", net_ip->string, net_port->integer);
+	return adrstrbuf;
 }

@@ -877,6 +877,143 @@ void BigInfo_SetValueForKey( char *s, const char *key, const char *value ) {
 }
 
 
+void Info_Print( const char *s ) {
+	char	key[BIG_INFO_KEY];
+	char	value[BIG_INFO_VALUE];
+	char	*o;
+	int		l;
+
+	if (*s == '\\')
+		s++;
+	while (*s)
+	{
+		o = key;
+		while (*s && *s != '\\')
+			*o++ = *s++;
+
+		l = o - key;
+		if (l < 20)
+		{
+			Com_Memset (o, ' ', 20-l);
+			key[20] = 0;
+		}
+		else
+			*o = 0;
+		Com_Printf ("%s ", key);
+
+		if (!*s)
+		{
+			Com_Printf ("MISSING VALUE\n");
+			return;
+		}
+
+		o = value;
+		s++;
+		while (*s && *s != '\\')
+			*o++ = *s++;
+		*o = 0;
+
+		if (*s)
+			s++;
+		Com_Printf ("%s\n", value);
+	}
+}
+
+
+static void Info_EncodeChar(unsigned char chr, unsigned char* encodedchr)
+{
+	sprintf((char*)encodedchr, "%%%X", (char)chr);
+}
+
+static void Info_Encode(const char* inurl, int encodelen, char* outencodedurl, int len)
+{
+	int i, y;
+	unsigned char* url = (unsigned char*)inurl;
+	unsigned char* encodedurl = (unsigned char*)outencodedurl;
+	
+	for(i = 0, y = 0; y < len -4 && i < encodelen; i++)
+	{
+		switch(url[i])
+		{
+			case '\\':
+			case '\"':
+			case ';':
+				Info_EncodeChar(url[i], &encodedurl[y]);
+				y += 3;
+				break;
+			
+			default:
+				if(url[i] < 0x20)
+				{
+					Info_EncodeChar(url[i], &encodedurl[y]);
+					y += 3;
+				}else{
+					encodedurl[y] = url[i];
+					++y;
+				}
+				break;
+		}
+	}
+	encodedurl[y] = '\0';
+}
+
+char Info_DecodeChar(unsigned char* encodedchr)
+{
+	char decoded;
+	char encoded[4];
+
+        encoded[0] = encodedchr[0];
+        encoded[1] = encodedchr[1];
+        encoded[2] = encodedchr[2];
+        encoded[3] = encodedchr[3];
+
+        if(encoded[0] != '%'){
+            return ' ';
+	}
+
+	decoded = strtol(&encoded[1], NULL, 16);
+        return decoded;
+}
+
+int Info_Decode(const char* inurl, char* outdecodedurl, int buflen)
+{
+	int i, y, k;
+
+	unsigned char* url = (unsigned char*)inurl;
+	unsigned char* decodedurl = (unsigned char*)outdecodedurl;
+	
+	for(i = 0, y = 0; url[y] && i < buflen; i++)
+	{
+		if(url[y] == '%')
+		{
+			decodedurl[i] = Info_DecodeChar(&url[y]);
+
+			for(k = 0; url[y] && k < 3; ++k)
+				++y;
+		}else{
+			decodedurl[i] = url[y];
+			++y;
+		}
+	}
+	return i;
+}
+
+void BigInfo_SetEncodedValueForKey( char *s, const char *key, const char *value, int len )
+{
+    char codedvalue[BIG_INFO_STRING];
+
+    Info_Encode(value, len, codedvalue, sizeof(codedvalue));
+
+    BigInfo_SetValueForKey( s, key, codedvalue );
+}
+
+int BigInfo_DecodedValueForKey( const char *s, const char *key, char *out, int outbuflen)
+{
+    const char* value;
+
+    value = Info_ValueForKey( s, key );
+    return Info_Decode(value, out, outbuflen);
+}
 
 
 /*
@@ -925,48 +1062,6 @@ void Q_strchrrepl(char *string, char torepl, char repl){
 
 
 //============================================================================
-
-void Info_Print( const char *s ) {
-	char	key[BIG_INFO_KEY];
-	char	value[BIG_INFO_VALUE];
-	char	*o;
-	int		l;
-
-	if (*s == '\\')
-		s++;
-	while (*s)
-	{
-		o = key;
-		while (*s && *s != '\\')
-			*o++ = *s++;
-
-		l = o - key;
-		if (l < 20)
-		{
-			Com_Memset (o, ' ', 20-l);
-			key[20] = 0;
-		}
-		else
-			*o = 0;
-		Com_Printf ("%s ", key);
-
-		if (!*s)
-		{
-			Com_Printf ("MISSING VALUE\n");
-			return;
-		}
-
-		o = value;
-		s++;
-		while (*s && *s != '\\')
-			*o++ = *s++;
-		*o = 0;
-
-		if (*s)
-			s++;
-		Com_Printf ("%s\n", value);
-	}
-}
 
 
 /*****************************************************
@@ -1059,14 +1154,14 @@ qboolean isNumeric(const char* string, int size){
     const char* ptr;
     int i;
 
-    if(size > 0){ //If we have given a length compare the whole string
+    if(size > 0){ //If we have given a length compare the string limited by the length
 
         for(i = 0, ptr = string; i < size; i++, ptr++){
             if(i == 0 && *ptr == '-') continue;
             if(*ptr < '0' || *ptr > '9') return qfalse;
         }
 
-    } else { //Search until the 1st space otherwise or null otherwise
+    } else { //Search until the 1st space or null otherwise
 
         for(i = 0, ptr = string; *ptr != ' '; i++, ptr++){
             if(i == 0 && *ptr == '-') continue;
@@ -1080,33 +1175,34 @@ qboolean isNumeric(const char* string, int size){
 
 
 
+
 /*
-=====================================================================
-
+ =====================================================================
+ 
  Functions to operate onto a stack in lifo mode
-
-=====================================================================
-*/
+ 
+ =====================================================================
+ */
 
 void stack_init(void *array[], size_t size){
     array[0] = (void*)((size_t)array+size );	//Moving the stackpointer in array[0] to top of stack
 }
 
 qboolean stack_push(void *array[], int size, void* pointer){
-        void** base;
-
-        if(array[0] == &array[1]) return qfalse;	//Stackoverflow
-        array[0] -= sizeof(void*);
-
-        base = *array;
-        *base = pointer;
-        return qtrue;
+	void** base;
+	
+	if(array[0] == &array[1]) return qfalse;	//Stackoverflow
+	array[0] -= sizeof(void*);
+	
+	base = *array;
+	*base = pointer;
+	return qtrue;
 }
 
 void* stack_pop(void *array[], int size){
-
+	
     void** base;
-
+	
     if(array[0] < (void*)((size_t)array+size )){
         base = *array;
         array[0] += sizeof(void*);
@@ -1115,164 +1211,198 @@ void* stack_pop(void *array[], int size){
     return NULL;	//Stack reached bottom
 }
 
-/*
-=====================================================================
-
-  Writing XML STRINGS
-
-=====================================================================
-*/
 
 /*
-==================
-XML_Init
+ =====================================================================
+ 
+ Writing XML STRINGS
+ 
+ =====================================================================
+ */
 
-Changes or adds a key/value pair
-==================
-*/
+
+
+void XML_AppendToBuffer( xml_t *base, const char* s )
+{
+    int len = strlen(s);
+	
+    if(len + base->bufposition + 1 >= base->buffersize )
+    {
+        Com_Printf(  "Error: XML_AppendToBuffer: Overflow!\n" );
+        return;
+    }
+    Com_Memcpy(base->buffer + base->bufposition, s, len);
+    base->bufposition += len;
+    base->buffer[base->bufposition] = '\0';
+}
+
+
+/*
+ ==================
+ XML_Init
+ 
+ Changes or adds a key/value pair
+ ==================
+ */
 
 void XML_Init( xml_t *base, char *s, int size, char* encoding) {
+	
 	Com_Memset(base,0,sizeof(xml_t));
+	char version[1024];
+	
 	base->buffer = s;
+	base->bufposition = 0;
 	base->buffersize = size;
 	base->encoding = encoding;
 	stack_init(base->stack,sizeof(base->stack));
 	if ( 256 > size ) {
 		Com_Printf(  "Error: XML_Init: too small infostring" );
 	}
-	Com_sprintf(s, size, "<?xml version=\"1.0\" encoding=\"%s\"?>\n\0", base->encoding);
+	Com_sprintf(version, sizeof(version), "<?xml version=\"1.0\" encoding=\"%s\"?>\n\0", base->encoding);
+	XML_AppendToBuffer( base, version );
 }
 
 
 /*
-==================
-XML_Escape
-Changes or adds a key/value pair
-==================
-*/
+ ==================
+ XML_Escape
+ Changes or adds a key/value pair
+ ==================
+ */
 void XML_Escape( char* buffer, size_t size, const char* string){
 	int i;
-
-	//i = 7 create a safe margin for strcpy
-
+	
 	for(i = 7; i < size && *string != 0; i++, string++){
-
+		
 	    switch(*string){
-
-                case '<':
-                    strcpy(buffer, "&lt;");
-                    buffer += 4;
-                    break;
-                case '>':
-                    strcpy(buffer, "&gt;");
-                    buffer += 4;
-                    break;
-                case '&':
-                    strcpy(buffer, "&amp;");
-                    buffer += 5;
-                    break;
-                case '"':
-                    strcpy(buffer, "&quot;");
-                    buffer += 6;
-                    break;
-                case '\'':
-                    strcpy(buffer, "&apos;");
-                    buffer += 6;
-                    break;
-                default:
-                    if(*string >= ' '){
-                        *buffer = *string;
-                        buffer++;
-                    }
-            }
-        }
-        *buffer = 0;
+				
+			case '<':
+				strcpy(buffer, "&lt;");
+				buffer += 4;
+				break;
+			case '>':
+				strcpy(buffer, "&gt;");
+				buffer += 4;
+				break;
+			case '&':
+				strcpy(buffer, "&amp;");
+				buffer += 5;
+				break;
+			case '"':
+				strcpy(buffer, "&quot;");
+				buffer += 6;
+				break;
+			case '\'':
+				strcpy(buffer, "&apos;");
+				buffer += 6;
+				break;
+			default:
+				if(*string >= ' '){
+					*buffer = *string;
+					buffer++;
+				}
+		}
+	}
+	*buffer = 0;
 }
 
 
 
-
 /*
-==================
-XML_OpenTag
-
-Changes or adds a key/value pair
-==================
-*/
+ ==================
+ XML_OpenTag
+ 
+ Changes or adds a key/value pair
+ ==================
+ */
 qboolean QDECL XML_OpenTag( xml_t *base, char* root, int count,... ) {
-
+	
 	char* key;
 	char* value;
-	char* s = base->buffer;
-	size_t size = base->buffersize;
 	char buffer[1024];
 	char smallbuff[128];
 	int i;
-
+	
 	buffer[0] = 0;
 	Com_Memset(&smallbuff[1],' ',base->parents*6);
 	smallbuff[0] = '\n';
 	smallbuff[base->parents*6] = 0;
-	Q_strcat(s,size,smallbuff);
-	Com_sprintf(buffer,sizeof(buffer),"<%s ",root);
-	if(!stack_push(base->stack,sizeof(base->stack),&s[strlen(s)+1])){
-		//XML_Init(base, s, size, "ISO-8859-1");
+	XML_AppendToBuffer( base, smallbuff );
+	Com_sprintf(buffer,sizeof(buffer),"<%s",root);
+	
+	if(!stack_push(base->stack,sizeof(base->stack), base->buffer + base->bufposition + 1)){
 		Com_Printf("^3Warning: XML_OpenTag called without prior initialization\n");
 		return qfalse;
 	}
-
-	Q_strcat(s,size,buffer);
+	
+	XML_AppendToBuffer( base, buffer );
 	va_list argptr;
 	va_start(argptr, count);
 	for(i=0;i < count;i++){
 	    key = va_arg(argptr, char*);
 	    value = va_arg(argptr, char*);
 	    XML_Escape(smallbuff,sizeof(smallbuff),value);
-	    Com_sprintf(buffer,sizeof(buffer),"%s=\"%s\" ",key,smallbuff);
-	    Q_strcat(s,size,buffer);
+		
+		Com_sprintf(buffer,sizeof(buffer)," %s=\"%s\"",key,smallbuff);
+		
+	    XML_AppendToBuffer( base, buffer );
 	}
 	va_end(argptr);
-	Q_strcat(s,size,">\0");
+	XML_AppendToBuffer( base, ">" );
 	base->parents++;
 	base->last = qtrue;
 	return qtrue;
 }
 
 /*
-==================
-XML_CloseTag
-
-Changes or adds a key/value pair
-==================
-*/
+ ==================
+ XML_CloseTag
+ 
+ Changes or adds a key/value pair
+ ==================
+ */
 void XML_CloseTag(xml_t *base) {
-
+	
 	char buffer[256];
 	char outbuffer[256];
 	char preoffset[128];
 	int i;
-	char* s = base->buffer;
-	size_t size = base->buffersize;
 	char*	root;
 	char*	stringptr = buffer;
 
+	if(base->parents == 0)
+	{
+		Com_PrintError("XML_CloseTag: Invalid close attempt in XML. Attempt to close more elements than you have opened.\n");
+		Com_Printf("Printing up to 960 recent characters of XML as debug:\n");
+		if(base->bufposition > 960)
+		{
+			Com_Printf("%s\n", &base->buffer[base->bufposition -960]);
+		}else{
+			Com_Printf("%s\n", base->buffer);
+		}
+		Com_PrintError("You have errors in your XML code\n");
+		return;
+	}
 	base->parents--;
 	Com_Memset(&preoffset[1],' ',base->parents*6);
 	preoffset[base->parents*6] = 0;
 	preoffset[(base->parents*6)+1] = 0;
-
+	
+	buffer[0] = '\0';
+	
 	root = stack_pop(base->stack,sizeof(base->stack));
-	for(i=0 ;*root != ' ' && *root != 0 && i < sizeof(buffer); stringptr++, root++, i++) *stringptr = *root;
+	for(i=0 ;*root != ' ' && *root != 0 && *root != '>' && i < sizeof(buffer); stringptr++, root++, i++) *stringptr = *root;
 	*stringptr = 0;
 	if(base->last){
 		Com_sprintf(outbuffer,sizeof(outbuffer),"</%s>",buffer);
 	}else{
 		Com_sprintf(outbuffer,sizeof(outbuffer),"\n%s</%s>",&preoffset[1],buffer);
 	}
-
-	Q_strcat(s,size,outbuffer);
+	
+	XML_AppendToBuffer( base, outbuffer );
 	base->last = qfalse;
 }
+
 
 //====================================================================
 
@@ -1505,7 +1635,10 @@ qboolean isInteger(const char* string, int size)
             sign = qtrue;
             continue;
         }
-        if(*ptr < '0' || *ptr > '9') return qfalse;
+        if(*ptr < '0' || *ptr > '9')
+	{
+		return qfalse;
+	}
     }
     return qtrue;
 }
@@ -1533,6 +1666,12 @@ qboolean isVector(const char* string, int size, int dim)
         {
             ptr++; i++;
         }
+
+        if(*ptr != ' ')
+        {
+            break;
+        }
+
     }
     if(dim != 0)
         return qfalse;
@@ -1561,9 +1700,18 @@ qboolean strToVect(const char* string, float *vect, int dim)
         {
             ptr++;
         }
+
+
+        if(*ptr != ' ')
+        {
+            break;
+        }
+
     }
     if(i != dim)
         return qfalse;
 
     return qtrue;
 }
+
+
